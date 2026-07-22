@@ -17,10 +17,5 @@ GitHub Actions:
 - checks Docker Hub for new stable `dpage/pgadmin4` tags on a schedule
 - builds this repository image with the same detected version
 - publishes to:
-  - `ghcr.io/<owner>/pgadmin`
-  - `docker.io/<DOCKERHUB_USERNAME>/pgadmin`
-
-## Required secrets
-
-- `DOCKERHUB_USERNAME`
-- `DOCKERHUB_TOKEN`
+  - `ghcr.io/<owner>/pgadmin:<version>`
+  - `docker.io/<DOCKERHUB_USERNAME>/pgadmin:<version>`

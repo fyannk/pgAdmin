@@ -1,5 +1,6 @@
 ARG VERSION=9.16
 FROM dpage/pgadmin4:${VERSION}
+ARG VERSION
 
 ENV SUMMARY="FYannK pgAdmin Container Image." \
     DESCRIPTION="Custom pgAdmin image for openshift compatibility."
