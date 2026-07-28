@@ -105,7 +105,6 @@ RUN /venv/bin/python3 -m pip install --no-cache-dir --upgrade \
 ########################################################################
 # Keep the upstream PostgreSQL client-tool coverage without retaining builders.
 ########################################################################
-FROM postgres:13-alpine3.24 AS pg13-builder
 FROM postgres:14-alpine3.24 AS pg14-builder
 FROM postgres:15-alpine3.24 AS pg15-builder
 FROM postgres:16-alpine3.24 AS pg16-builder
@@ -114,10 +113,6 @@ FROM postgres:18-alpine3.24 AS pg18-builder
 
 FROM ${ALPINE_IMAGE} AS tools-builder
 
-COPY --from=pg13-builder /usr/local/bin/pg_dump /usr/local/pgsql/pgsql-13/
-COPY --from=pg13-builder /usr/local/bin/pg_dumpall /usr/local/pgsql/pgsql-13/
-COPY --from=pg13-builder /usr/local/bin/pg_restore /usr/local/pgsql/pgsql-13/
-COPY --from=pg13-builder /usr/local/bin/psql /usr/local/pgsql/pgsql-13/
 COPY --from=pg14-builder /usr/local/bin/pg_dump /usr/local/pgsql/pgsql-14/
 COPY --from=pg14-builder /usr/local/bin/pg_dumpall /usr/local/pgsql/pgsql-14/
 COPY --from=pg14-builder /usr/local/bin/pg_restore /usr/local/pgsql/pgsql-14/

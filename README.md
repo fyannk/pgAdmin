@@ -30,7 +30,7 @@ Service or Route rather than restoring a file capability.
 | Mail service | Retains upstream Postfix and password-reset email behavior | Postfix and `sudo` omitted; password-reset email is disabled |
 | Build-only tools | Same as upstream | Excluded from the final runtime image |
 
-The hardened rebuild keeps pgAdmin's PostgreSQL 13–18 client utilities and
+The hardened rebuild keeps pgAdmin's PostgreSQL 14–18 client utilities and
 supported runtime integrations. `libcurl` remains because PostgreSQL's OAuth
 client library requires it; it is installed from the freshly upgraded Alpine
 package repository rather than inherited from the upstream image.
