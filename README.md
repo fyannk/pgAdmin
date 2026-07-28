@@ -1,97 +1,143 @@
 # pgadmin
 
-![Base image](https://img.shields.io/badge/base-dpage%2Fpgadmin4-1f6feb?style=for-the-badge)
+![Variants](https://img.shields.io/badge/variants-upstream%20%2B%20hardened-1f6feb?style=for-the-badge)
 ![OpenShift friendly](https://img.shields.io/badge/OpenShift-restricted--friendly-ee0000?style=for-the-badge)
-![Automation](https://img.shields.io/badge/releases-fully%20automated-0a7f5a?style=for-the-badge)
+![Source rebuilt](https://img.shields.io/badge/pgAdmin-source%20rebuilt-0a7f5a?style=for-the-badge)
 
-> Thin delta. Least privilege. Upstream pgAdmin, repackaged for OpenShift-style clusters.
+> Two OpenShift-friendly pgAdmin variants: upstream-compatible and hardened.
 
-| Snapshot | Value |
-| --- | --- |
-| Upstream base | `dpage/pgadmin4:${VERSION}` |
-| Primary goal | Keep pgAdmin close to upstream while removing a privilege that is awkward in restricted clusters |
-| Image delta | Remove `/etc/sudoers.d/postfix` and clear `CAP_NET_BIND_SERVICE` from Python |
-| Delivery model | Automatically track stable upstream releases and publish matching tags |
+## Image tags
 
-## Why this project exists
-
-The official `dpage/pgadmin4` image is built to work across a broad range of container runtimes. OpenShift is stricter by design.
-
-In a typical OpenShift deployment:
-
-- containers run as an arbitrary non-root UID
-- restricted Security Context Constraints (SCCs) aggressively drop Linux capabilities
-- images that depend on embedded privilege are more likely to become brittle
-
-The sharp edge here is `CAP_NET_BIND_SERVICE`.
-
-That capability exists for one purpose: it lets a non-root process bind to ports below `1024`. Carrying that privilege on the Python interpreter may be acceptable in more permissive environments, but it is a poor fit for OpenShift-style hardening:
-
-- it bakes extra privilege into the interpreter itself
-- every Python process started from that binary inherits the ability to bind low ports
-- restricted clusters often strip or block that privilege, which can turn into startup or permission issues
-- OpenShift already expects network exposure to be handled by Services and Routes, so shipping extra bind-low-port privilege inside the image is usually unnecessary
-
-This repository takes the smallest possible approach: keep the upstream pgAdmin release, remove the capability, and publish the result automatically.
-
-## What changes from upstream
-
-| Area | Upstream intent | This image |
+| Tag | Variant | Use when |
 | --- | --- | --- |
-| Base image | Official `dpage/pgadmin4` release | Same upstream version |
-| Low-port binding privilege | Python can carry `CAP_NET_BIND_SERVICE` for privileged-port binding | Capability is cleared with `setcap CAP_NET_BIND_SERVICE=-eip /usr/local/bin/python3.14` |
-| Postfix sudoers drop-in | Present in the image | Removed with `rm -vf /etc/sudoers.d/postfix` |
+| `<version>` | Upstream-compatible no-cap | Immutable release image. It is published once when the matching official `dpage/pgadmin4` release first appears, with only its privileged Python capability removed. |
+| `<version>-hardened` | Source-rebuilt hardened image | Mutable daily rebuild of that pgAdmin release with refreshed OS and Python dependencies. |
+| `latest` | Source-rebuilt hardened image | Mutable daily rebuild of the newest supported pgAdmin release. This tag always points to the hardened variant. |
 
-The `setcap ... =-eip` form clears the capability from the file, so this image stays closer to the least-privilege model OpenShift expects.
+Both variants remove privileged-port support and therefore default to port
+`8080` or `8443` when `PGADMIN_LISTEN_PORT` is not set. Expose them through a
+Service or Route rather than restoring a file capability.
 
-## Dockerfile logic
+## What is different
 
-```Dockerfile
-ARG VERSION=9.16
-FROM dpage/pgadmin4:${VERSION}
+| Area | `<version>` upstream-compatible | `<version>-hardened` |
+| --- | --- | --- |
+| Application | Official prebuilt `dpage/pgadmin4:<version>` | Exact `REL-x_y` pgAdmin source release rebuilt in CI |
+| Image delta | Removes only the dedicated `python3-cap` binary that grants `CAP_NET_BIND_SERVICE` | Replaces the base image, rebuilds the application, and removes privileged components |
+| OS packages | Retains the upstream package snapshot | Fresh base images (`--pull`) plus `apk upgrade --no-cache` |
+| Python dependencies | Retains upstream dependency versions | Re-resolved during each build; fixed-package floors cover Pillow, httplib2, pyasn1, and setuptools |
+| File capabilities | No capability-bearing Python binary | No capability-bearing Python binary or `libcap` package |
+| Mail service | Retains upstream Postfix and password-reset email behavior | Postfix and `sudo` omitted; password-reset email is disabled |
+| Build-only tools | Same as upstream | Excluded from the final runtime image |
 
-USER root
-RUN rm -vf /etc/sudoers.d/postfix \
-  && setcap CAP_NET_BIND_SERVICE=-eip /usr/local/bin/python3.14
-USER pgadmin
+The hardened rebuild keeps pgAdmin's PostgreSQL 13–18 client utilities and
+supported runtime integrations. `libcurl` remains because PostgreSQL's OAuth
+client library requires it; it is installed from the freshly upgraded Alpine
+package repository rather than inherited from the upstream image.
+
+## Hardened image security model
+
+- Runs as non-root UID `5050` by default and remains compatible with an
+  OpenShift arbitrary UID using GID `0`.
+- Does not ship `CAP_NET_BIND_SERVICE`, a privileged Python copy, `libcap`,
+  `postfix`, `sudo`, or the postfix sudoers rule.
+- Uses an explicit `PGADMIN_DISABLE_POSTFIX=1` default and removes the postfix
+  startup block entirely, so clearing that variable cannot invoke a missing
+  privileged component.
+- Builds Python dependencies with `pip --upgrade`, package-security floors,
+  and `pip check` before copying the virtual environment into the runtime.
+- Publishes SPDX SBOM and SLSA provenance attestations with every image.
+
+The hardened image intentionally keeps pgAdmin's upstream arbitrary-UID
+mechanism: `/etc/passwd` is group-writable by GID `0` so a random OpenShift UID
+can add its own identity entry. This is required for the supported restricted
+OpenShift execution model. Use a read-only root filesystem only with an
+NSS-compatible identity strategy or a platform that already provides a passwd
+entry.
+
+No image can promise a permanent zero-CVE result. A finding with no vendor fix
+cannot be removed safely without replacing the affected component or feature.
+The hardened variant removes stale, fixable inherited packages at rebuild time
+and records the resulting SBOM so audits can distinguish current fixed findings
+from unfixed upstream issues.
+
+## Local builds
+
+Build the upstream-compatible variant from this repository:
+
+```text
+docker build --pull -f Dockerfile.upstream -t fyannk/pgadmin:9.16 .
 ```
 
-The goal is intentionally narrow: no pgAdmin fork, no custom application patch stack, just a small repackaging layer that makes the upstream image friendlier to hardened clusters.
+The hardened Docker build context **must be the matching pgAdmin source
+checkout**, not this repository. With the sibling checkout supplied for
+development:
+
+```text
+git -C ../pgadmin4 checkout REL-9_16
+docker build --pull -f Dockerfile -t fyannk/pgadmin:9.16-hardened ../pgadmin4
+```
+
+The `--pull` flag is important for the hardened image: it refreshes the Python,
+Alpine, and PostgreSQL builder images before the final image runs `apk upgrade`
+and rebuilds Python packages.
+
+To inspect only vulnerabilities that have a published fix, use:
+
+```text
+grype fyannk/pgadmin:9.16-hardened --only-fixed
+```
+
+Run an unrestricted scan as well when policy requires it; findings without a
+fixed version need a documented risk decision rather than an image-layer
+cleanup. The daily build refreshes the selected Python and Alpine bases, so run
+the scan against the tag intended for deployment rather than relying on a
+previous report.
+
+## Runtime requirements
+
+The first launch needs the standard pgAdmin bootstrap variables:
+
+```text
+PGADMIN_DEFAULT_EMAIL=admin@example.com
+PGADMIN_DEFAULT_PASSWORD=<secret>
+```
+
+The service listens on port `8080` by default. Set `PGADMIN_LISTEN_PORT` if a
+different unprivileged port is required. A Service or Route should provide
+external port mapping; do not add a file capability merely to bind port 80 or
+443 inside the container.
+
+Use `PGADMIN_DEFAULT_PASSWORD_FILE` instead of a plaintext environment variable
+where the orchestrator can mount a secret file.
 
 ## Release automation
 
-```mermaid
-flowchart LR
-    Hub[Docker Hub: dpage/pgadmin4 tags] --> Detect[Resolve latest stable x.y tag]
-    Manual[workflow_dispatch with optional version] --> Detect
-    Detect --> Build[Build this repo with VERSION=<tag>]
-    Build --> GHCR[Push to GHCR]
-    Build --> DockerHub[Push to Docker Hub]
-```
+The daily workflow resolves the latest stable `dpage/pgadmin4` version. It
+checks Docker Hub for the corresponding upstream-compatible tag and builds that
+image only if the tag does not exist. It then checks out the exact
+`pgadmin-org/pgadmin4` `REL-x_y` source tag and rebuilds the hardened image
+every day, updating both `<version>-hardened` and `latest`. Every build attaches
+SBOM and provenance attestations.
 
-GitHub Actions handles the release loop end to end:
+The workflow retains the ten most-recent untagged GHCR manifests, which are
+created when a mutable hardened tag moves. It intentionally creates no daily
+date tags, preventing unbounded tagged-image growth. Docker Hub retention for
+untagged manifests is controlled by the registry account policy and should be
+configured there to match the organisation's retention requirements.
 
-- runs daily at `03:23 UTC`
-- can also be triggered manually with an optional `version` input
-- looks for stable upstream tags matching `x.y`
-- builds this repository with the same detected version
-- publishes versioned images to both registries
-
-## Published images
+Published images:
 
 - `ghcr.io/fyannk/pgadmin:<version>`
 - `docker.io/fyannk/pgadmin:<version>`
+- `ghcr.io/fyannk/pgadmin:<version>-hardened`
+- `docker.io/fyannk/pgadmin:<version>-hardened`
+- `ghcr.io/fyannk/pgadmin:latest` (hardened)
+- `docker.io/fyannk/pgadmin:latest` (hardened)
 
-## When this image makes sense
+## Scope
 
-- OpenShift clusters using restricted or restricted-v2 SCCs
-- Kubernetes environments that strip extra Linux capabilities
-- teams that want an auditable wrapper around upstream pgAdmin instead of a long-lived fork
-
-## Project philosophy
-
-One small, reviewable delta:
-
-- stay on the official pgAdmin release stream
-- remove the capability that causes friction in restricted environments
-- automate publishing so the wrapper does not become a maintenance burden
+Neither variant forks the pgAdmin application. The upstream-compatible image
+only removes privileged-port binding support. The hardened image additionally
+removes the in-container Postfix password-reset delivery path and rebuilds the
+runtime from the upstream pgAdmin source.

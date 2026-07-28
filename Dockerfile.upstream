@@ -1,0 +1,32 @@
+ARG VERSION=9.16
+FROM dpage/pgadmin4:${VERSION}
+
+ARG VERSION
+
+ENV SUMMARY="FYannK pgAdmin for OpenShift" \
+    DESCRIPTION="Official pgAdmin image with privileged-port capability support removed"
+
+LABEL summary="$SUMMARY" \
+      description="$DESCRIPTION" \
+      io.k8s.display-name="$SUMMARY" \
+      io.k8s.description="$DESCRIPTION" \
+      name="pgAdmin4" \
+      org.opencontainers.image.title="pgAdmin4" \
+      org.opencontainers.image.description="$DESCRIPTION" \
+      org.opencontainers.image.url="https://github.com/fyannk/pgadmin" \
+      org.opencontainers.image.source="https://github.com/fyannk/pgadmin" \
+      org.opencontainers.image.vendor="fyannk" \
+      org.opencontainers.image.version="$VERSION" \
+      org.opencontainers.image.base.name="dpage/pgadmin4:${VERSION}" \
+      io.fyannk.pgadmin.variant="upstream-no-cap" \
+      vendor="fyannk" \
+      url="https://github.com/fyannk/pgadmin" \
+      version="$VERSION" \
+      release="2"
+
+# Upstream uses this separate Python binary solely to carry
+# CAP_NET_BIND_SERVICE. Removing it makes the entrypoint select ordinary Python
+# and default to port 8080/8443, while retaining all other upstream behavior.
+USER root
+RUN rm -f /usr/local/bin/python3-cap /venv/bin/python3-cap
+USER pgadmin

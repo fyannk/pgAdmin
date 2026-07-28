@@ -1,4 +1,4 @@
-name: Build and publish pgAdmin image
+name: Build and publish pgAdmin image variants
 
 on:
   schedule:
@@ -9,6 +9,10 @@ on:
         description: "pgAdmin version to build (for example 9.16)"
         required: false
         type: string
+
+concurrency:
+  group: pgadmin-image-publish
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -22,6 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.resolve.outputs.version }}
+      publish_upstream: ${{ steps.upstream.outputs.publish }}
     steps:
       - name: Resolve target version
         id: resolve
@@ -48,12 +53,60 @@ jobs:
           echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
           echo "Using version: ${VERSION}"
 
+      - name: Check upstream-compatible image publication
+        id: upstream
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          status="$(
+            curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+              "https://hub.docker.com/v2/repositories/${DOCKERHUB_USERNAME}/${IMAGE_NAME}/tags/${VERSION}"
+          )"
+
+          case "${status}" in
+            200)
+              echo "publish=false" >> "${GITHUB_OUTPUT}"
+              echo "Upstream-compatible image ${IMAGE_NAME}:${VERSION} already exists; skipping publish."
+              ;;
+            404)
+              echo "publish=true" >> "${GITHUB_OUTPUT}"
+              echo "Upstream-compatible image ${IMAGE_NAME}:${VERSION} is new; it will be published."
+              ;;
+            *)
+              echo "Could not determine whether ${IMAGE_NAME}:${VERSION} exists (HTTP ${status})." >&2
+              exit 1
+              ;;
+          esac
+
   build-and-push:
     needs: detect-version
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Checkout matching pgAdmin source
+        id: source
+        env:
+          VERSION: ${{ needs.detect-version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+$ ]]; then
+            echo "Unsupported pgAdmin version: ${VERSION}" >&2
+            exit 1
+          fi
+
+          source_ref="REL-${VERSION/./_}"
+          git clone --depth 1 --branch "${source_ref}" \
+            https://github.com/pgadmin-org/pgadmin4.git pgadmin4
+
+          revision="$(git -C pgadmin4 rev-parse HEAD)"
+          echo "revision=${revision}" >> "${GITHUB_OUTPUT}"
+          echo "Building pgAdmin ${VERSION} from ${source_ref} (${revision})"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -71,14 +124,44 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and push image
+      - name: Build and push upstream-compatible image
+        if: needs.detect-version.outputs.publish_upstream == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ./Dockerfile
+          file: ./Dockerfile.upstream
           build-args: |
             VERSION=${{ needs.detect-version.outputs.version }}
+          pull: true
           push: true
+          provenance: mode=max
+          sbom: true
           tags: |
             ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ needs.detect-version.outputs.version }}
             docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ needs.detect-version.outputs.version }}
+
+      - name: Build and push daily hardened image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./pgadmin4
+          file: ./Dockerfile
+          build-args: |
+            VERSION=${{ needs.detect-version.outputs.version }}
+            SOURCE_REVISION=${{ steps.source.outputs.revision }}
+          pull: true
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ needs.detect-version.outputs.version }}-hardened
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ needs.detect-version.outputs.version }}-hardened
+            ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Retain recent untagged GHCR manifests
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: ${{ env.IMAGE_NAME }}
+          package-type: container
+          delete-only-untagged-versions: true
+          min-versions-to-keep: 10
