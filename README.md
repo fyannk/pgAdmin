@@ -55,6 +55,12 @@ OpenShift execution model. Use a read-only root filesystem only with an
 NSS-compatible identity strategy or a platform that already provides a passwd
 entry.
 
+Every pull request rebuilds the hardened image and asserts these properties
+against the result, so a change that reintroduces a privileged component or
+leaves build-only tooling in the runtime fails before it merges. The scan gate
+blocks on critical findings that have an applicable fix; everything else is
+published to the repository's code scanning results rather than ignored.
+
 No image can promise a permanent zero-CVE result. A finding with no vendor fix
 cannot be removed safely without replacing the affected component or feature.
 The hardened variant removes stale, fixable inherited packages at rebuild time

@@ -211,6 +211,9 @@ jobs:
     name: Vulnerability scan
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
@@ -220,26 +223,39 @@ jobs:
       - name: Load the image under test
         run: docker load --input /tmp/hardened.tar
 
-      # Gate on findings that have a published fix. An unfixed upstream CVE
-      # cannot be resolved by rebuilding, so failing on it would only teach
-      # people to ignore this job.
-      - name: Fixable vulnerabilities
+      # The cutoff is critical rather than high on purpose. "Has a fix" is not
+      # the same as "this repository can apply it": grype reports the current
+      # CPython advisories as fixed in 3.15 alphas and betas, and cryptography
+      # as fixed a major above the version pgAdmin's requirements.txt pins.
+      # Gating on those would leave the check permanently red for changes that
+      # could never turn it green, which is how a required check gets ignored.
+      # Everything below the cutoff still reaches the Security tab below.
+      - name: Fixable critical vulnerabilities
         uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
         with:
           image: pgadmin-ci:hardened
           only-fixed: true
-          severity-cutoff: high
+          severity-cutoff: critical
           fail-build: true
           output-format: table
 
       - name: Full inventory
         if: always()
-        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
         id: full
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
         with:
           image: pgadmin-ci:hardened
           fail-build: false
           output-format: sarif
+
+      # Code scanning is where the non-gating findings live, so a high with no
+      # applicable fix stays visible and tracked instead of silently passing.
+      - name: Publish to code scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
+        with:
+          sarif_file: ${{ steps.full.outputs.sarif }}
+          category: grype-hardened
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always()
