@@ -69,11 +69,10 @@ RUN apk add --no-cache --virtual .build-deps \
     'pyasn1>=0.6.4' \
     'setuptools>=83.0.0' \
     > /tmp/security-constraints.txt
-RUN python3 -m venv --system-site-packages /venv && \
-  /venv/bin/python3 -m pip install --no-cache-dir --upgrade \
-    pip \
-    setuptools \
-    wheel && \
+# --without-pip keeps pip and wheel out of the runtime venv: the interpreter
+# reaches the base image's pip through --system-site-packages for the install,
+# so neither ends up as a scannable distribution in the shipped image.
+RUN python3 -m venv --system-site-packages --without-pip /venv && \
   /venv/bin/python3 -m pip install --no-cache-dir --upgrade \
     --constraint /tmp/security-constraints.txt \
     -r /tmp/requirements.txt \
