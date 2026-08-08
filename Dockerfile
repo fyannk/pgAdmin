@@ -2,7 +2,7 @@
 
 # Build with the matching pgAdmin source tree as the context, for example:
 # docker build --pull -f Dockerfile ../pgadmin4
-ARG VERSION=9.16
+ARG VERSION=9.17
 ARG PYTHON_IMAGE=python:3.14-alpine
 ARG ALPINE_IMAGE=alpine:3.24
 
@@ -63,7 +63,6 @@ RUN apk add --no-cache --virtual .build-deps \
     postgresql-dev \
     rust \
     zlib-dev && \
-  sed -i -E 's/^setuptools==82\.\*/setuptools>=83.0.0/' /tmp/requirements.txt && \
   printf '%s\n' \
     'Pillow>=12.3.0' \
     'httplib2>=0.32.0' \

@@ -66,7 +66,7 @@ from unfixed upstream issues.
 Build the upstream-compatible variant from this repository:
 
 ```text
-docker build --pull -f Dockerfile.upstream -t fyannk/pgadmin:9.16 .
+docker build --pull -f Dockerfile.upstream -t fyannk/pgadmin:9.17 .
 ```
 
 The hardened Docker build context **must be the matching pgAdmin source
@@ -74,8 +74,8 @@ checkout**, not this repository. With the sibling checkout supplied for
 development:
 
 ```text
-git -C ../pgadmin4 checkout REL-9_16
-docker build --pull -f Dockerfile -t fyannk/pgadmin:9.16-hardened ../pgadmin4
+git -C ../pgadmin4 checkout REL-9_17
+docker build --pull -f Dockerfile -t fyannk/pgadmin:9.17-hardened ../pgadmin4
 ```
 
 The `--pull` flag is important for the hardened image: it refreshes the Python,
@@ -85,7 +85,7 @@ and rebuilds Python packages.
 To inspect only vulnerabilities that have a published fix, use:
 
 ```text
-grype fyannk/pgadmin:9.16-hardened --only-fixed
+grype fyannk/pgadmin:9.17-hardened --only-fixed
 ```
 
 Run an unrestricted scan as well when policy requires it; findings without a
