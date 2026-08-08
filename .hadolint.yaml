@@ -1,0 +1,14 @@
+ignored:
+  # The hardened image exists to resolve currently patched OS and Python
+  # packages at build time. Pinning apk and pip versions in the recipe is the
+  # opposite of what this image is for; the pgAdmin release itself is pinned
+  # through ARG VERSION and the security floors in the constraints file.
+  - DL3018
+  - DL3013
+
+  # Both of these sit on lines carried verbatim from upstream's Dockerfile:
+  # the corepack bootstrap and the dotfile cleanup glob after the JS bundle.
+  # Diverging from upstream here would add maintenance cost on every release
+  # for no security benefit.
+  - DL3016
+  - SC3026
