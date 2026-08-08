@@ -140,6 +140,10 @@ FROM ${PYTHON_IMAGE} AS runtime
 ARG VERSION
 ARG PYTHON_IMAGE
 ARG SOURCE_REVISION=""
+# Fingerprint of every input that can change this image's contents. The publish
+# workflow compares it against the published image to avoid pushing a rebuild
+# that would only differ by timestamp.
+ARG BUILD_INPUTS=""
 
 ENV SUMMARY="FYannK pgAdmin for OpenShift" \
   DESCRIPTION="Source-built pgAdmin for restricted OpenShift-style deployments" \
@@ -160,10 +164,11 @@ LABEL summary="$SUMMARY" \
     org.opencontainers.image.version="$VERSION" \
     org.opencontainers.image.base.name="$PYTHON_IMAGE" \
     io.fyannk.pgadmin.variant="hardened" \
+    io.fyannk.pgadmin.inputs="$BUILD_INPUTS" \
     vendor="fyannk" \
     url="https://github.com/fyannk/pgadmin" \
     version="$VERSION" \
-    release="2"
+    release="3"
 
 RUN apk upgrade --no-cache && \
   apk add --no-cache \

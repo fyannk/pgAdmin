@@ -11,8 +11,8 @@
 | Tag | Variant | Use when |
 | --- | --- | --- |
 | `<version>` | Upstream-compatible no-cap | Immutable release image. It is published once when the matching official `dpage/pgadmin4` release first appears, with only its privileged Python capability removed. |
-| `<version>-hardened` | Source-rebuilt hardened image | Mutable daily rebuild of that pgAdmin release with refreshed OS and Python dependencies. |
-| `latest` | Source-rebuilt hardened image | Mutable daily rebuild of the newest supported pgAdmin release. This tag always points to the hardened variant. |
+| `<version>-hardened` | Source-rebuilt hardened image | Mutable rebuild of that pgAdmin release with refreshed OS and Python dependencies. |
+| `latest` | Source-rebuilt hardened image | Mutable rebuild of the newest supported pgAdmin release. This tag always points to the hardened variant. |
 
 Both variants remove privileged-port support and therefore default to port
 `8080` or `8443` when `PGADMIN_LISTEN_PORT` is not set. Expose them through a
@@ -90,8 +90,8 @@ grype fyannk/pgadmin:9.17-hardened --only-fixed
 
 Run an unrestricted scan as well when policy requires it; findings without a
 fixed version need a documented risk decision rather than an image-layer
-cleanup. The daily build refreshes the selected Python and Alpine bases, so run
-the scan against the tag intended for deployment rather than relying on a
+cleanup. The scheduled build refreshes the selected Python and Alpine bases, so
+run the scan against the tag intended for deployment rather than relying on a
 previous report.
 
 ## Runtime requirements
@@ -113,27 +113,31 @@ where the orchestrator can mount a secret file.
 
 ## Release automation
 
-The daily workflow resolves the latest stable `dpage/pgadmin4` version. It
-checks Docker Hub for the corresponding upstream-compatible tag and builds that
-image only if the tag does not exist. It then checks out the exact
-`pgadmin-org/pgadmin4` `REL-x_y` source tag and rebuilds the hardened image
-every day, updating both `<version>-hardened` and `latest`. Every build attaches
-SBOM and provenance attestations.
+Images are published to GHCR only.
+
+The scheduled workflow resolves the latest stable `dpage/pgadmin4` version. It
+checks GHCR for the corresponding upstream-compatible tag and builds that image
+only if the tag does not exist. It then checks out the exact
+`pgadmin-org/pgadmin4` `REL-x_y` source tag and rebuilds the hardened image,
+updating both `<version>-hardened` and `latest`. Every build attaches SBOM and
+provenance attestations.
+
+The hardened image is rebuilt only when an input that can change its contents
+has moved: the pgAdmin source revision, this repository's revision, or any base
+image digest. That fingerprint is recorded on the image as the
+`io.fyannk.pgadmin.inputs` label and compared against the published `latest`. A
+rebuild happens regardless once the published image is more than seven days old,
+so a dependency patch with unchanged base images is still picked up.
 
 The workflow retains the ten most-recent untagged GHCR manifests, which are
 created when a mutable hardened tag moves. It intentionally creates no daily
-date tags, preventing unbounded tagged-image growth. Docker Hub retention for
-untagged manifests is controlled by the registry account policy and should be
-configured there to match the organisation's retention requirements.
+date tags, preventing unbounded tagged-image growth.
 
 Published images:
 
 - `ghcr.io/fyannk/pgadmin:<version>`
-- `docker.io/fyannk/pgadmin:<version>`
 - `ghcr.io/fyannk/pgadmin:<version>-hardened`
-- `docker.io/fyannk/pgadmin:<version>-hardened`
 - `ghcr.io/fyannk/pgadmin:latest` (hardened)
-- `docker.io/fyannk/pgadmin:latest` (hardened)
 
 ## Scope
 
