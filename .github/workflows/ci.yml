@@ -1,0 +1,249 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  HADOLINT_IMAGE: hadolint/hadolint:v2.14.0-alpine@sha256:7aba693c1442eb31c0b015c129697cb3b6cb7da589d85c7562f9deb435a6657c
+  ACTIONLINT_IMAGE: rhysd/actionlint:1.7.9@sha256:a0383f60d92601e2694e24b24d37df7b6a40bed7cedbc447611c50009bf02d94
+
+jobs:
+  lint:
+    name: Lint and static analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Workflow syntax
+        run: |
+          docker run --rm -v "${PWD}:/repo" -w /repo "${ACTIONLINT_IMAGE}" -color
+
+      - name: Dockerfile rules
+        run: |
+          # Suppressions and their rationale live in .hadolint.yaml.
+          docker run --rm -v "${PWD}:/repo" -w /repo "${HADOLINT_IMAGE}" \
+            hadolint Dockerfile Dockerfile.upstream
+
+      - name: Resolve pgAdmin version
+        id: version
+        run: |
+          set -euo pipefail
+          version="$(grep -m1 -oP '^ARG VERSION=\K[0-9]+\.[0-9]+' Dockerfile)"
+          upstream="$(grep -m1 -oP '^ARG VERSION=\K[0-9]+\.[0-9]+' Dockerfile.upstream)"
+          if [[ "${version}" != "${upstream}" ]]; then
+            echo "Dockerfile pins ${version} but Dockerfile.upstream pins ${upstream}" >&2
+            exit 1
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+      - name: BuildKit checks
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          # The hardened recipe expects the pgAdmin source tree as its context,
+          # so give the linter the real thing rather than this repository.
+          git clone --depth 1 --branch "REL-${VERSION/./_}" \
+            https://github.com/pgadmin-org/pgadmin4.git pgadmin4
+          docker buildx build --check -f Dockerfile.upstream .
+          docker buildx build --check -f Dockerfile ./pgadmin4
+
+  build:
+    name: Build images
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.source.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Check out the matching pgAdmin source
+        id: source
+        run: |
+          set -euo pipefail
+          version="$(grep -m1 -oP '^ARG VERSION=\K[0-9]+\.[0-9]+' Dockerfile)"
+          git clone --depth 1 --branch "REL-${version/./_}" \
+            https://github.com/pgadmin-org/pgadmin4.git pgadmin4
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "revision=$(git -C pgadmin4 rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
+
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+      - name: Build upstream-compatible image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v6
+        with:
+          context: .
+          file: ./Dockerfile.upstream
+          build-args: |
+            VERSION=${{ steps.source.outputs.version }}
+          push: false
+          load: true
+          tags: pgadmin-ci:upstream
+          cache-from: type=gha,scope=upstream
+          cache-to: type=gha,mode=max,scope=upstream
+
+      - name: Build hardened image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v6
+        with:
+          context: ./pgadmin4
+          file: ./Dockerfile
+          build-args: |
+            VERSION=${{ steps.source.outputs.version }}
+            SOURCE_REVISION=${{ steps.source.outputs.revision }}
+            BUILD_INPUTS=ci
+          push: false
+          # Written straight to a tarball so the profile and scan jobs consume
+          # the exact image this job produced rather than rebuilding it.
+          outputs: type=docker,dest=/tmp/hardened.tar
+          tags: pgadmin-ci:hardened
+          cache-from: type=gha,scope=hardened
+          cache-to: type=gha,mode=max,scope=hardened
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: hardened-image
+          path: /tmp/hardened.tar
+          retention-days: 1
+          compression-level: 6
+
+  container:
+    name: Restricted container profiles
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: hardened-image
+          path: /tmp
+
+      - name: Load the image under test
+        run: docker load --input /tmp/hardened.tar
+
+      - name: Runs unprivileged by default
+        run: |
+          set -euo pipefail
+          user="$(docker image inspect pgadmin-ci:hardened --format '{{.Config.User}}')"
+          echo "Config.User=${user}"
+          [[ "${user}" == "5050" ]]
+
+      - name: Privileged components are absent
+        run: |
+          set -euo pipefail
+          fail=0
+          installed="$(docker run --rm --entrypoint apk pgadmin-ci:hardened info)"
+          for pkg in postfix sudo libcap libcap-utils; do
+            if grep -qx "${pkg}" <<<"${installed}"; then
+              echo "FAIL: ${pkg} is installed"
+              fail=1
+            fi
+          done
+
+          # The capability-bearing interpreter copy is the whole reason this
+          # image exists; make sure no rebuild reintroduces it.
+          if docker run --rm --entrypoint sh pgadmin-ci:hardened \
+               -c 'test -e /usr/local/bin/python3-cap -o -e /venv/bin/python3-cap'; then
+            echo "FAIL: a python3-cap binary is present"
+            fail=1
+          fi
+
+          if docker run --rm --entrypoint grep pgadmin-ci:hardened \
+               -q 'Start Postfix' /entrypoint.sh; then
+            echo "FAIL: the postfix startup block survived"
+            fail=1
+          fi
+
+          exit "${fail}"
+
+      - name: Build-time Python tooling stays out of the runtime venv
+        run: |
+          set -euo pipefail
+          fail=0
+          for pkg in pip wheel; do
+            if docker run --rm --entrypoint sh pgadmin-ci:hardened \
+                 -c "ls -d /venv/lib/python3*/site-packages/${pkg}-*.dist-info" >/dev/null 2>&1; then
+              echo "FAIL: ${pkg} is installed in /venv"
+              fail=1
+            fi
+          done
+          # setuptools is a genuine runtime dependency from requirements.txt.
+          docker run --rm --entrypoint sh pgadmin-ci:hardened \
+            -c 'ls -d /venv/lib/python3*/site-packages/setuptools-*.dist-info' >/dev/null
+          exit "${fail}"
+
+      - name: Arbitrary UID can start the application
+        run: |
+          set -euo pipefail
+          # OpenShift assigns an unpredictable UID in the root group, which
+          # works only while /etc/passwd stays group-writable.
+          docker run --rm --user 12345:0 --entrypoint sh pgadmin-ci:hardened -c '
+            set -e
+            test -w /etc/passwd
+            test -w /var/lib/pgadmin
+            test -w /run/pgadmin
+            /venv/bin/python3 -c "import psycopg, flask, gunicorn; print(\"imports ok\")"
+          '
+
+      - name: PostgreSQL client utilities are present
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint sh pgadmin-ci:hardened -c '
+            set -e
+            for major in 14 15 16 17 18; do
+              for tool in pg_dump pg_dumpall pg_restore psql; do
+                test -x "/usr/local/pgsql-${major}/${tool}"
+              done
+            done
+            echo "client tools ok"
+          '
+
+  scan:
+    name: Vulnerability scan
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: hardened-image
+          path: /tmp
+
+      - name: Load the image under test
+        run: docker load --input /tmp/hardened.tar
+
+      # Gate on findings that have a published fix. An unfixed upstream CVE
+      # cannot be resolved by rebuilding, so failing on it would only teach
+      # people to ignore this job.
+      - name: Fixable vulnerabilities
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
+        with:
+          image: pgadmin-ci:hardened
+          only-fixed: true
+          severity-cutoff: high
+          fail-build: true
+          output-format: table
+
+      - name: Full inventory
+        if: always()
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
+        id: full
+        with:
+          image: pgadmin-ci:hardened
+          fail-build: false
+          output-format: sarif
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
+        with:
+          name: vulnerability-report
+          path: ${{ steps.full.outputs.sarif }}
+          retention-days: 14
