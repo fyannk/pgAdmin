@@ -22,7 +22,7 @@ LABEL summary="$SUMMARY" \
       vendor="fyannk" \
       url="https://github.com/fyannk/pgadmin" \
       version="$VERSION" \
-      release="2"
+      release="3"
 
 # Upstream uses this separate Python binary solely to carry
 # CAP_NET_BIND_SERVICE. Removing it makes the entrypoint select ordinary Python
