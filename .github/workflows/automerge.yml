@@ -29,8 +29,12 @@ concurrency:
 jobs:
   automerge:
     name: Queue for merge on green
+    # Author and sender both, not author alone: on synchronize the author is
+    # still Dependabot even when a person pushed the commit that fired the
+    # event, and this job holds a write token under pull_request_target.
     if: >-
       github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.sender.login == 'dependabot[bot]' &&
       github.event.pull_request.base.ref == 'main'
     runs-on: ubuntu-latest
     timeout-minutes: 5
