@@ -117,6 +117,39 @@ external port mapping; do not add a file capability merely to bind port 80 or
 Use `PGADMIN_DEFAULT_PASSWORD_FILE` instead of a plaintext environment variable
 where the orchestrator can mount a secret file.
 
+## Merge automation
+
+The ruleset on `main` requires the four jobs
+[`ci.yml`](.github/workflows/ci.yml) runs on a pull request — lint, build,
+container profiles, and the vulnerability scan — plus the CodeQL analysis of
+the workflows, and requires that review threads be resolved. It requires no
+approvals: the gate is the pipeline and the reading, not a rubber stamp.
+Copilot is requested on every pull request automatically; its review is always
+a comment, never an approval, so it cannot approve a change, but an unresolved
+thread it opens does hold the merge until someone answers it.
+
+Branches need not be up to date with `main` to merge. Requiring that would
+catch the case where two pull requests pass alone and break together, but
+nothing rebases a stale branch on its own: auto-merge only waits and merges,
+and Dependabot refreshes a branch when its manifest conflicts, not when `main`
+moves. The requirement would trade a rare class of conflict for a queue that
+stalls on every merge. `ci.yml` runs on pushes to `main` as well, so a
+conflict that slips through surfaces there within minutes.
+
+Dependabot's patch and minor bumps, grouped weekly by
+[`dependabot.yml`](.github/dependabot.yml), queue themselves through
+[`automerge.yml`](.github/workflows/automerge.yml) and land the moment the
+required checks go green. Anything else, a major among them, is left for a
+person: the workflow arms auto-merge from an allowlist, so an update type it
+has not seen stops rather than merges.
+
+What Dependabot watches is the hardened recipe's bases — Alpine, Python, and
+the PostgreSQL client builders — plus the actions every workflow pins. The
+upstream-compatible image is deliberately outside that: it mirrors an official
+pgAdmin release, and which release it tracks is resolved by the publish
+workflow rather than bumped in a pull request. The `dpage/pgadmin4` base is
+ignored for that reason.
+
 ## Release automation
 
 Images are published to GHCR only.
