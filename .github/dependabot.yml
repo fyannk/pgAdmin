@@ -12,6 +12,15 @@ updates:
       time: "06:30"
       timezone: Europe/Paris
     open-pull-requests-limit: 5
+    # Only the hardened recipe's bases are Dependabot's to move. The
+    # upstream-compatible image is a mirror of an official pgAdmin release:
+    # which release it tracks is decided by the publish workflow, which
+    # resolves the newest stable tag, and the image is published once and
+    # never patched afterwards. A bump here would also turn CI red on its own,
+    # since ci.yml requires both recipes to pin the same version and nothing
+    # moves the hardened one alongside it.
+    ignore:
+      - dependency-name: dpage/pgadmin4
     commit-message:
       prefix: "build(deps)"
     groups:
