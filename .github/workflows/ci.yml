@@ -231,7 +231,7 @@ jobs:
       # could never turn it green, which is how a required check gets ignored.
       # Everything below the cutoff still reaches the Security tab below.
       - name: Fixable critical vulnerabilities
-        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
         with:
           image: pgadmin-ci:hardened
           only-fixed: true
@@ -242,7 +242,7 @@ jobs:
       - name: Full inventory
         if: always()
         id: full
-        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
         with:
           image: pgadmin-ci:hardened
           fail-build: false
@@ -252,7 +252,7 @@ jobs:
       # applicable fix stays visible and tracked instead of silently passing.
       - name: Publish to code scanning
         if: always()
-        uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
         with:
           sarif_file: ${{ steps.full.outputs.sarif }}
           category: grype-hardened
