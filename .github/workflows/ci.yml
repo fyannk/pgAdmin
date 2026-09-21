@@ -46,7 +46,7 @@ jobs:
           fi
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
 
-      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       - name: BuildKit checks
         env:
@@ -78,10 +78,10 @@ jobs:
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
           echo "revision=$(git -C pgadmin4 rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
 
-      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       - name: Build upstream-compatible image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v6
         with:
           context: .
           file: ./Dockerfile.upstream
@@ -94,7 +94,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=upstream
 
       - name: Build hardened image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v6
         with:
           context: ./pgadmin4
           file: ./Dockerfile
@@ -252,7 +252,7 @@ jobs:
       # applicable fix stays visible and tracked instead of silently passing.
       - name: Publish to code scanning
         if: always()
-        uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4
+        uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4
         with:
           sarif_file: ${{ steps.full.outputs.sarif }}
           category: grype-hardened
