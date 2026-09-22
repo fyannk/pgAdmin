@@ -212,6 +212,11 @@ jobs:
         with:
           package: ${{ env.IMAGE_NAME }}
           delete-untagged: true
-          delete-partial-images: true
+          # A tagged index whose children were pruned is a ghost. The previous
+          # prune left five of them (9.16 to 9.18), and the upstream publish
+          # gate treats a resolvable tag as published, so without this pass
+          # the broken mirror tag would never be rebuilt. Not combined with
+          # delete-partial-images: in v1.2.2 that option takes precedence and
+          # the ghost pass is skipped entirely.
           delete-ghost-images: true
           validate: true
