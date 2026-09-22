@@ -168,9 +168,13 @@ image digest. That fingerprint is recorded on the image as the
 rebuild happens regardless once the published image is more than seven days old,
 so a dependency patch with unchanged base images is still picked up.
 
-The workflow retains the ten most-recent untagged GHCR manifests, which are
-created when a mutable hardened tag moves. It intentionally creates no daily
-date tags, preventing unbounded tagged-image growth.
+After each publish the workflow prunes GHCR manifests that no tag references
+any more, which is what a moved hardened tag leaves behind. Platform and
+attestation manifests are untagged too but stay in place as long as a tagged
+index points at them; a tagged image whose children have gone missing is
+removed rather than left to fail with `manifest unknown`. The workflow
+intentionally creates no daily date tags, preventing unbounded tagged-image
+growth.
 
 Published images:
 

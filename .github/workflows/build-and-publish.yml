@@ -201,10 +201,17 @@ jobs:
             ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ needs.detect-version.outputs.version }}-hardened
             ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest
 
-      - name: Retain recent untagged GHCR manifests
-        uses: actions/delete-package-versions@e5bc658cc4c965c472efe991f8beea3981499c55 # v5.0.0
+      # Every push creates an index whose platform image and attestation
+      # manifests are untagged. actions/delete-package-versions cannot tell
+      # those children apart from the orphans a moved tag leaves behind, so it
+      # eventually deleted the children of still-tagged versions and turned
+      # them into "manifest unknown". This action walks each tagged index and
+      # only prunes what nothing references.
+      - name: Prune orphaned GHCR manifests
+        uses: dataaxiom/ghcr-cleanup-action@d52806a0dc70b430571a37da1fde39733ffd640f # v1.2.2
         with:
-          package-name: ${{ env.IMAGE_NAME }}
-          package-type: container
-          delete-only-untagged-versions: true
-          min-versions-to-keep: 10
+          package: ${{ env.IMAGE_NAME }}
+          delete-untagged: true
+          delete-partial-images: true
+          delete-ghost-images: true
+          validate: true
