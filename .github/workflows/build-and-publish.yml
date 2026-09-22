@@ -213,4 +213,5 @@ jobs:
           package: ${{ env.IMAGE_NAME }}
           delete-untagged: true
           delete-partial-images: true
+          delete-ghost-images: true
           validate: true
