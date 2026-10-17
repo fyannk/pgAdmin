@@ -201,22 +201,11 @@ jobs:
             ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ needs.detect-version.outputs.version }}-hardened
             ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest
 
-      # Every push creates an index whose platform image and attestation
-      # manifests are untagged. actions/delete-package-versions cannot tell
-      # those children apart from the orphans a moved tag leaves behind, so it
-      # eventually deleted the children of still-tagged versions and turned
-      # them into "manifest unknown". This action walks each tagged index and
-      # only prunes what nothing references.
+      # Prune untagged manifests that no tagged index references. Do not enable
+      # delete-ghost-images: it can delete tagged release versions.
       - name: Prune orphaned GHCR manifests
         uses: dataaxiom/ghcr-cleanup-action@d52806a0dc70b430571a37da1fde39733ffd640f # v1.2.2
         with:
           package: ${{ env.IMAGE_NAME }}
           delete-untagged: true
-          # A tagged index whose children were pruned is a ghost. The previous
-          # prune left five of them (9.16 to 9.18), and the upstream publish
-          # gate treats a resolvable tag as published, so without this pass
-          # the broken mirror tag would never be rebuilt. Not combined with
-          # delete-partial-images: in v1.2.2 that option takes precedence and
-          # the ghost pass is skipped entirely.
-          delete-ghost-images: true
           validate: true
