@@ -16,9 +16,9 @@ updates:
     # upstream-compatible image is a mirror of an official pgAdmin release:
     # which release it tracks is decided by the publish workflow, which
     # resolves the newest stable tag, and the image is published once and
-    # never patched afterwards. A bump here would also turn CI red on its own,
-    # since ci.yml requires both recipes to pin the same version and nothing
-    # moves the hardened one alongside it.
+    # never patched afterwards. The ARG VERSION defaults are only local-build
+    # conveniences; CI resolves the release the same way the publish workflow
+    # does.
     ignore:
       - dependency-name: dpage/pgadmin4
     commit-message:
