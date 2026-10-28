@@ -54,8 +54,8 @@ jobs:
           # so give the linter the real thing rather than this repository.
           git clone --depth 1 --branch "REL-${VERSION/./_}" \
             https://github.com/pgadmin-org/pgadmin4.git pgadmin4
-          docker buildx build --check -f Dockerfile.upstream .
-          docker buildx build --check -f Dockerfile ./pgadmin4
+          docker buildx build --check --build-arg VERSION="${VERSION}" -f Dockerfile.upstream .
+          docker buildx build --check --build-arg VERSION="${VERSION}" -f Dockerfile ./pgadmin4
 
   build:
     name: Build images
