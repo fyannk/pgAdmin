@@ -9,26 +9,35 @@ on:
         description: "pgAdmin version to build (for example 9.16)"
         required: false
         type: string
+      force_latest:
+        description: "Move the latest tag even when the major version changes"
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: pgadmin-image-publish
   cancel-in-progress: false
 
-permissions:
-  contents: read
-  packages: write
+# Nothing is granted by default; each job declares exactly what it needs.
+permissions: {}
 
 env:
   IMAGE_NAME: pgadmin
+  IMAGE_REPO: ghcr.io/${{ github.repository_owner }}/pgadmin
 
 jobs:
   detect-version:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       version: ${{ steps.resolve.outputs.version }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Resolve target version
         id: resolve
@@ -44,9 +53,20 @@ jobs:
   build-and-push:
     needs: detect-version
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # push images and signatures to GHCR
+      id-token: write # keyless cosign signature and provenance attestation
+      attestations: write # GitHub artifact attestations
+    outputs:
+      version: ${{ needs.detect-version.outputs.version }}
+      hardened-digest: ${{ steps.build-hardened.outputs.digest }}
+      upstream-digest: ${{ steps.build-upstream.outputs.digest }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Checkout matching pgAdmin source
         id: source
@@ -71,6 +91,9 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
       - name: Login to GHCR
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
         with:
@@ -81,7 +104,7 @@ jobs:
       - name: Check upstream-compatible image publication
         id: upstream
         env:
-          REF: ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ needs.detect-version.outputs.version }}
+          REF: ${{ env.IMAGE_REPO }}:${{ needs.detect-version.outputs.version }}
         shell: bash
         run: |
           set -euo pipefail
@@ -94,8 +117,9 @@ jobs:
           fi
 
       - name: Build and push upstream-compatible image
+        id: build-upstream
         if: steps.upstream.outputs.publish == 'true'
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ./Dockerfile.upstream
@@ -106,12 +130,26 @@ jobs:
           provenance: mode=max
           sbom: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ needs.detect-version.outputs.version }}
+            ${{ env.IMAGE_REPO }}:${{ needs.detect-version.outputs.version }}
+
+      - name: Attest and sign upstream-compatible image
+        if: steps.upstream.outputs.publish == 'true'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE_REPO }}
+          subject-digest: ${{ steps.build-upstream.outputs.digest }}
+          push-to-registry: true
+
+      - name: Cosign upstream-compatible image by digest
+        if: steps.upstream.outputs.publish == 'true'
+        env:
+          DIGEST_REF: ${{ env.IMAGE_REPO }}@${{ steps.build-upstream.outputs.digest }}
+        run: cosign sign --yes "${DIGEST_REF}"
 
       - name: Decide whether the hardened image needs a rebuild
         id: hardened
         env:
-          LATEST_REF: ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest
+          LATEST_REF: ${{ env.IMAGE_REPO }}:latest
           SOURCE_REVISION: ${{ steps.source.outputs.revision }}
           RECIPE_REVISION: ${{ github.sha }}
           # Upper bound on staleness: rebuild anyway after this long so a PyPI
@@ -172,9 +210,51 @@ jobs:
             echo "Rebuilding."
           fi
 
-      - name: Build and push hardened image
+      # latest is a promise to consumers that nothing breaking moved under
+      # them. A new pgAdmin major (or a first publication) is a decision, so an
+      # unattended run keeps latest where it is and only the version tags move.
+      # A manual dispatch with force_latest is that decision.
+      - name: Compute hardened tags
+        id: tags
         if: steps.hardened.outputs.rebuild == 'true'
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v6
+        env:
+          VERSION: ${{ needs.detect-version.outputs.version }}
+          FORCE_LATEST: ${{ inputs.force_latest || 'false' }}
+          LATEST_REF: ${{ env.IMAGE_REPO }}:latest
+        shell: bash
+        run: |
+          set -euo pipefail
+          stamp="$(date -u +%Y%m%d)"
+          tags=(
+            "${IMAGE_REPO}:${VERSION}-hardened"
+            "${IMAGE_REPO}:${VERSION}-hardened-${stamp}"
+          )
+
+          previous="$(
+            docker buildx imagetools inspect "${LATEST_REF}" \
+              --format '{{ json .Image }}' 2>/dev/null \
+              | jq -r '.config.Labels["org.opencontainers.image.version"] // empty' || true
+          )"
+          if [[ -z "${previous}" ]]; then
+            echo "No published latest yet; it will be created."
+            tags+=("${LATEST_REF}")
+          elif [[ "${previous%%.*}" == "${VERSION%%.*}" || "${FORCE_LATEST}" == "true" ]]; then
+            echo "latest moves from ${previous} to ${VERSION}."
+            tags+=("${LATEST_REF}")
+          else
+            echo "::notice::Skipping latest: ${previous} -> ${VERSION} changes the major version. Dispatch with force_latest to move it."
+          fi
+
+          {
+            echo "list<<EOF_TAGS"
+            printf '%s\n' "${tags[@]}"
+            echo "EOF_TAGS"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Build and push hardened image
+        id: build-hardened
+        if: steps.hardened.outputs.rebuild == 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: ./pgadmin4
           file: ./Dockerfile
@@ -186,10 +266,79 @@ jobs:
           push: true
           provenance: mode=max
           sbom: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ needs.detect-version.outputs.version }}-hardened
-            ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest
+          tags: ${{ steps.tags.outputs.list }}
 
+      - name: Attest hardened image
+        if: steps.hardened.outputs.rebuild == 'true'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE_REPO }}
+          subject-digest: ${{ steps.build-hardened.outputs.digest }}
+          push-to-registry: true
+
+      - name: Cosign hardened image by digest
+        if: steps.hardened.outputs.rebuild == 'true'
+        env:
+          DIGEST_REF: ${{ env.IMAGE_REPO }}@${{ steps.build-hardened.outputs.digest }}
+        run: cosign sign --yes "${DIGEST_REF}"
+
+  # Scans what was actually pushed, by digest, after the registry accepted it.
+  scan-published:
+    name: Scan published digest
+    needs: build-and-push
+    if: needs.build-and-push.outputs.hardened-digest != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Login to GHCR
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install grype
+        id: grype
+        uses: anchore/scan-action/download-grype@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+
+      # Same cutoff as ci.yml: a fixable critical fails, everything else is
+      # reported. The full inventory is kept as an artifact either way.
+      - name: Scan the pushed digest
+        env:
+          GRYPE: ${{ steps.grype.outputs.cmd }}
+          TARGET: registry:${{ env.IMAGE_REPO }}@${{ needs.build-and-push.outputs.hardened-digest }}
+        run: |
+          set -euo pipefail
+          "${GRYPE}" -q -o json "${TARGET}" > grype.json
+          jq -r '.matches[] | "\(.vulnerability.severity)\t\(.vulnerability.fix.state)\t\(.vulnerability.id)\t\(.artifact.name)"' grype.json \
+            | sort | uniq -c | sort -rn | head -40
+          fixable="$(jq -r '[.matches[]
+            | select(.vulnerability.severity == "Critical" and .vulnerability.fix.state == "fixed")
+            | "\(.vulnerability.id) \(.artifact.name)"] | unique | .[]' grype.json)"
+          if [[ -n "${fixable}" ]]; then
+            echo "::error::Fixable criticals in the published image:"
+            echo "${fixable}"
+            exit 1
+          fi
+          echo "No fixable critical in the published digest."
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: published-vulnerability-report
+          path: grype.json
+          retention-days: 14
+
+  prune:
+    name: Prune orphaned manifests
+    needs: [build-and-push, scan-published]
+    if: always() && needs.build-and-push.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
       # Prune untagged manifests that no tagged index references. Do not enable
       # delete-ghost-images: it can delete tagged release versions.
       - name: Prune orphaned GHCR manifests

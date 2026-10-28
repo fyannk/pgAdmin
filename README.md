@@ -161,8 +161,11 @@ The scheduled workflow resolves the latest stable `dpage/pgadmin4` version. It
 checks GHCR for the corresponding upstream-compatible tag and builds that image
 only if the tag does not exist. It then checks out the exact
 `pgadmin-org/pgadmin4` `REL-x_y` source tag and rebuilds the hardened image,
-updating both `<version>-hardened` and `latest`. Every build attaches SBOM and
-provenance attestations.
+updating `<version>-hardened`, the immutable `<version>-hardened-<yyyymmdd>`
+and, only when the major version matches the published `latest` (or a manual
+dispatch sets `force_latest`), `latest`. Every build attaches SBOM and
+provenance attestations, a GitHub build-provenance attestation and a keyless
+cosign signature by digest, and the pushed digest is scanned afterwards.
 
 The hardened image is rebuilt only when an input that can change its contents
 has moved: the pgAdmin source revision, this repository's revision, or any base
@@ -174,13 +177,14 @@ so a dependency patch with unchanged base images is still picked up.
 After each publish the workflow prunes only untagged GHCR manifests that no
 tagged index references, such as old manifests left behind when `latest` moves.
 Tagged release versions are retained; the cleanup does not delete tagged images.
-The workflow intentionally creates no daily date tags, preventing unbounded
-tagged-image growth.
+Date tags are created only when a rebuild happens, not daily, so tagged-image
+growth stays bounded.
 
 Published images:
 
 - `ghcr.io/fyannk/pgadmin:<version>`
 - `ghcr.io/fyannk/pgadmin:<version>-hardened`
+- `ghcr.io/fyannk/pgadmin:<version>-hardened-<yyyymmdd>` (immutable)
 - `ghcr.io/fyannk/pgadmin:latest` (hardened)
 
 ## Scope
