@@ -238,14 +238,52 @@ jobs:
       # Gating on those would leave the check permanently red for changes that
       # could never turn it green, which is how a required check gets ignored.
       # Everything below the cutoff still reaches the Security tab below.
-      - name: Fixable critical vulnerabilities
-        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
-        with:
-          image: pgadmin-ci:hardened
-          only-fixed: true
-          severity-cutoff: critical
-          fail-build: true
-          output-format: table
+      - name: Install grype
+        id: grype
+        uses: anchore/scan-action/download-grype@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+
+      # Only a fixable critical this change brings in fails the check. One that
+      # is already in the published image appeared because an advisory was
+      # filed, not because of this change, and failing every open pull request
+      # for it would block unrelated work until someone fixes main. Those are
+      # tracked instead by a single issue from image-watch.yml, and the nightly
+      # rebuild clears them as soon as a fix can be applied. Both images are
+      # scanned here with the same database, so the difference is what this
+      # change put into the image, not when each image was scanned.
+      - name: Fixable criticals introduced by this change
+        env:
+          GRYPE: ${{ steps.grype.outputs.cmd }}
+          BASELINE: ghcr.io/${{ github.repository_owner }}/pgadmin:latest
+        run: |
+          set -euo pipefail
+          fixable='[.matches[]
+            | select(.vulnerability.severity == "Critical" and .vulnerability.fix.state == "fixed")
+            | "\(.vulnerability.id) \(.artifact.name)"] | unique | .[]'
+
+          "${GRYPE}" -q -o json pgadmin-ci:hardened | jq -r "${fixable}" | sort > candidate.txt
+          if "${GRYPE}" -q -o json "registry:${BASELINE}" > baseline.json; then
+            jq -r "${fixable}" baseline.json | sort > baseline.txt
+          else
+            # Without a baseline nothing can be called pre-existing, so gate
+            # on everything rather than let a finding through unchecked.
+            echo "::warning::Could not scan ${BASELINE}; gating on every fixable critical"
+            : > baseline.txt
+          fi
+
+          # Keyed on advisory and package, not version: bumping a package to
+          # another still-vulnerable version is not a new finding.
+          introduced="$(comm -23 candidate.txt baseline.txt)"
+          existing="$(comm -12 candidate.txt baseline.txt)"
+
+          if [[ -n "${existing}" ]]; then
+            echo "::warning::Already in the published image, tracked by the image watch issue: $(tr '\n' ';' <<<"${existing}")"
+          fi
+          if [[ -n "${introduced}" ]]; then
+            echo "Fixable criticals introduced by this change:"
+            echo "${introduced}"
+            exit 1
+          fi
+          echo "No fixable critical introduced by this change."
 
       - name: Full inventory
         if: always()
