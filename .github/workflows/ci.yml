@@ -259,7 +259,7 @@ jobs:
           trap 'docker logs pgadmin-smoke || true; docker rm -f pgadmin-smoke >/dev/null 2>&1 || true; docker network rm smoke >/dev/null 2>&1 || true' EXIT
           docker network create smoke
           docker run -d --name pgadmin-smoke --network smoke --read-only \
-            --tmpfs /tmp --tmpfs /var/lib/pgadmin:uid=5050,gid=0,mode=0770 --tmpfs /run/pgadmin:uid=5050,gid=0,mode=0770 \
+            --tmpfs /tmp --tmpfs /var/lib/pgadmin:uid=5050,gid=0,mode=0770 --tmpfs /run/pgadmin:uid=5050,gid=0,mode=0770 --tmpfs /var/log/pgadmin:uid=5050,gid=0,mode=0770 \
             -e SCRIPT_NAME=/pgadmin \
             -e PGADMIN_LISTEN_PORT=8080 \
             -e PGADMIN_DEFAULT_EMAIL=smoke@example.com \
