@@ -23,10 +23,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Workflow syntax
         run: |
           docker run --rm -v "${PWD}:/repo" -w /repo "${ACTIONLINT_IMAGE}" -color
+
+      # Audits the workflows for injection, over-broad permissions, unpinned
+      # actions and credential persistence. Offline so a fork pull request
+      # without a token still gets the same answer.
+      - name: Workflow security audit
+        uses: zizmorcore/zizmor-action@53290badfa369cb0bf7ad16342cb62c2fa47ac7b # v0.8.0
+        with:
+          advanced-security: false
+          online-audits: false
 
       - name: Dockerfile rules
         run: |
@@ -56,6 +67,7 @@ jobs:
             https://github.com/pgadmin-org/pgadmin4.git pgadmin4
           docker buildx build --check --build-arg VERSION="${VERSION}" -f Dockerfile.upstream .
           docker buildx build --check --build-arg VERSION="${VERSION}" -f Dockerfile ./pgadmin4
+          docker buildx build --check --platform linux/arm64 --build-arg VERSION="${VERSION}" -f Dockerfile ./pgadmin4
 
   build:
     name: Build images
@@ -64,6 +76,8 @@ jobs:
       version: ${{ steps.source.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Check out the matching pgAdmin source
         id: source
@@ -78,7 +92,7 @@ jobs:
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       - name: Build upstream-compatible image
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ./Dockerfile.upstream
@@ -91,7 +105,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=upstream
 
       - name: Build hardened image
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: ./pgadmin4
           file: ./Dockerfile
@@ -202,18 +216,116 @@ jobs:
             /venv/bin/python3 -c "import psycopg, flask, gunicorn; print(\"imports ok\")"
           '
 
-      - name: PostgreSQL client utilities are present
+      # Executing each binary catches a missing shared library or a wrong
+      # architecture, which a mode-bit test cannot.
+      - name: PostgreSQL client utilities run
         run: |
           set -euo pipefail
           docker run --rm --entrypoint sh pgadmin-ci:hardened -c '
             set -e
             for major in 14 15 16 17 18; do
               for tool in pg_dump pg_dumpall pg_restore psql; do
-                test -x "/usr/local/pgsql-${major}/${tool}"
+                out="$("/usr/local/pgsql-${major}/${tool}" --version)"
+                echo "${out}"
+                case "${out}" in
+                  *" ${major}."*) ;;
+                  *) echo "FAIL: ${tool} for ${major} reports: ${out}" >&2; exit 1 ;;
+                esac
               done
             done
             echo "client tools ok"
           '
+
+  smoke:
+    name: Boot smoke test
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: hardened-image
+          path: /tmp
+
+      - name: Load the image under test
+        run: docker load --input /tmp/hardened.tar
+
+      # Behind a path-prefixing proxy with proxy-supplied identity: the
+      # configuration the pgToolBox stack runs. The probe goes through a user
+      # network from a second container, as the proxy would reach it, rather
+      # than through a published host port.
+      - name: Serves the ping endpoint under SCRIPT_NAME with webserver auth
+        run: |
+          set -euo pipefail
+          trap 'docker logs pgadmin-smoke || true; docker rm -f pgadmin-smoke >/dev/null 2>&1 || true; docker network rm smoke >/dev/null 2>&1 || true' EXIT
+          docker network create smoke
+          docker run -d --name pgadmin-smoke --network smoke --read-only \
+            --tmpfs /tmp --tmpfs /var/lib/pgadmin:uid=5050,gid=0,mode=0770 --tmpfs /run/pgadmin:uid=5050,gid=0,mode=0770 \
+            -e SCRIPT_NAME=/pgadmin \
+            -e PGADMIN_LISTEN_PORT=8080 \
+            -e PGADMIN_DEFAULT_EMAIL=smoke@example.com \
+            -e PGADMIN_DEFAULT_PASSWORD=smoke-test-only \
+            -e PGADMIN_CONFIG_AUTHENTICATION_SOURCES="['webserver']" \
+            -e PGADMIN_CONFIG_WEBSERVER_REMOTE_USER="'X-Forwarded-User'" \
+            -e PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED=False \
+            pgadmin-ci:hardened
+
+          for i in $(seq 1 60); do
+            if body="$(docker run --rm --network smoke --entrypoint wget pgadmin-ci:hardened -qO- http://pgadmin-smoke:8080/pgadmin/misc/ping 2>/dev/null)"; then
+              echo "ping after ${i} attempt(s): ${body}"
+              grep -q PING <<<"${body}"
+              exit 0
+            fi
+            if [[ "$(docker inspect -f '{{.State.Running}}' pgadmin-smoke)" != "true" ]]; then
+              echo "container exited before answering" >&2
+              exit 1
+            fi
+            sleep 2
+          done
+          echo "no answer from /pgadmin/misc/ping within 120s" >&2
+          exit 1
+
+  # TODO(arm64): the published images are amd64 only. This job measures whether
+  # the hardened recipe builds under QEMU (the Python wheel compilation is the
+  # expected bottleneck). It is informational until it is reliably green and
+  # fast enough; only then add linux/arm64 to the platforms of the publish
+  # workflow. If it fails, the failing step in its log is the TODO to fix.
+  build-arm64:
+    name: Build hardened image (arm64, informational)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Check out the matching pgAdmin source
+        id: source
+        run: |
+          set -euo pipefail
+          version="$(.github/scripts/resolve-pgadmin-version.sh)"
+          git clone --depth 1 --branch "REL-${version/./_}" \
+            https://github.com/pgadmin-org/pgadmin4.git pgadmin4
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: arm64
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+
+      - name: Build for linux/arm64
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ./pgadmin4
+          file: ./Dockerfile
+          platforms: linux/arm64
+          build-args: |
+            VERSION=${{ steps.source.outputs.version }}
+            BUILD_INPUTS=ci-arm64
+          push: false
+          cache-from: type=gha,scope=hardened-arm64
+          cache-to: type=gha,mode=max,scope=hardened-arm64
 
   scan:
     name: Vulnerability scan
