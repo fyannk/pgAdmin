@@ -25,7 +25,7 @@ Service or Route rather than restoring a file capability.
 | Application | Official prebuilt `dpage/pgadmin4:<version>` | Exact `REL-x_y` pgAdmin source release rebuilt in CI |
 | Image delta | Removes only the dedicated `python3-cap` binary that grants `CAP_NET_BIND_SERVICE` | Replaces the base image, rebuilds the application, and removes privileged components |
 | OS packages | Retains the upstream package snapshot | Fresh base images (`--pull`) plus `apk upgrade --no-cache` |
-| Python dependencies | Retains upstream dependency versions | Re-resolved during each build; fixed-package floors cover Pillow, httplib2, pyasn1, and setuptools |
+| Python dependencies | Retains upstream dependency versions | Re-resolved during each build; fixed-package floors cover Pillow, httplib2, pyasn1, setuptools, Authlib, certifi, and urllib3, with vulnerable exact pins lifted to upstream master's release |
 | File capabilities | No capability-bearing Python binary | No capability-bearing Python binary or `libcap` package |
 | Mail service | Retains upstream Postfix and password-reset email behavior | Postfix and `sudo` omitted; password-reset email is disabled |
 | Build-only tools | Same as upstream | Excluded from the final runtime image |
@@ -41,6 +41,7 @@ package repository rather than inherited from the upstream image.
   OpenShift arbitrary UID using GID `0`.
 - Does not ship `CAP_NET_BIND_SERVICE`, a privileged Python copy, `libcap`,
   `postfix`, `sudo`, or the postfix sudoers rule.
+- Ships no setuid or setgid binaries.
 - Uses an explicit `PGADMIN_DISABLE_POSTFIX=1` default and removes the postfix
   startup block entirely, so clearing that variable cannot invoke a missing
   privileged component.

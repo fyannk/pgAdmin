@@ -52,6 +52,11 @@ FROM ${PYTHON_IMAGE} AS python-builder
 
 COPY requirements.txt /tmp/requirements.txt
 
+# Floors cannot lift an exact pin, so pins that carry a fixed
+# critical are rewritten to the release upstream master already pins. Each
+# substitution matches only the vulnerable pin and stops applying once the
+# release tag catches up; the matching floor fails the build if a pin is
+# still vulnerable and no substitution covered it.
 RUN apk add --no-cache --virtual .build-deps \
     build-base \
     cargo \
@@ -68,7 +73,15 @@ RUN apk add --no-cache --virtual .build-deps \
     'httplib2>=0.32.0' \
     'pyasn1>=0.6.4' \
     'setuptools>=83.0.0' \
-    > /tmp/security-constraints.txt
+    'Authlib>=1.9.1' \
+    'certifi>=2026.10.18' \
+    'urllib3>=2.8.0' \
+    > /tmp/security-constraints.txt && \
+  sed -i \
+    -e 's/^Authlib==1\.8\.\*;/Authlib==1.9.*;/' \
+    -e 's/^certifi==2026\.7\.22$/certifi==2026.10.23/' \
+    -e 's/^urllib3==2\.7\.\*;/urllib3==2.8.*;/' \
+    /tmp/requirements.txt
 # --without-pip keeps pip and wheel out of the runtime venv: the interpreter
 # reaches the base image's pip through --system-site-packages for the install,
 # so neither ends up as a scannable distribution in the shipped image.
@@ -199,7 +212,10 @@ COPY pkg/docker/run_pgadmin.py pkg/docker/gunicorn_config.py /pgadmin4/
 COPY pkg/docker/entrypoint.sh /entrypoint.sh
 COPY LICENSE /pgadmin4/LICENSE
 
+# shadow is kept for the entrypoint's root-only usermod, but none of the
+# setuid helpers it and linux-pam install are needed at runtime.
 RUN find / -type d -name '__pycache__' -prune -exec rm -rf {} + && \
+  find / -xdev -type f -perm /6000 -exec chmod a-s {} + && \
   useradd -r -u 5050 -g root -s /sbin/nologin pgadmin && \
   mkdir -p /run/pgadmin /var/lib/pgadmin && \
   chown pgadmin:root /run/pgadmin /var/lib/pgadmin && \

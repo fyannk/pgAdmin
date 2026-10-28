@@ -163,6 +163,17 @@ jobs:
             fail=1
           fi
 
+          # Read the exported filesystem rather than searching from inside a
+          # container, so every directory is visible without running as root.
+          cid="$(docker create pgadmin-ci:hardened)"
+          setuid="$(docker export "${cid}" | tar -tvf - | awk '$1 ~ /^-(..[sS]|.....[sS])/')"
+          docker rm "${cid}" >/dev/null
+          if [[ -n "${setuid}" ]]; then
+            echo "FAIL: setuid/setgid binaries are present:"
+            echo "${setuid}"
+            fail=1
+          fi
+
           exit "${fail}"
 
       - name: Build-time Python tooling stays out of the runtime venv
