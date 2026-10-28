@@ -2,7 +2,7 @@
 
 # Build with the matching pgAdmin source tree as the context, for example:
 # docker build --pull -f Dockerfile ../pgadmin4
-ARG VERSION=9.17
+ARG VERSION=9.18
 ARG PYTHON_IMAGE=python:3.15-alpine
 ARG ALPINE_IMAGE=alpine:3.24
 
