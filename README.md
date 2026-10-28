@@ -59,8 +59,10 @@ entry.
 Every pull request rebuilds the hardened image and asserts these properties
 against the result, so a change that reintroduces a privileged component or
 leaves build-only tooling in the runtime fails before it merges. The scan gate
-blocks on critical findings that have an applicable fix; everything else is
-published to the repository's code scanning results rather than ignored.
+blocks on critical findings with an applicable fix that the change introduces;
+one already in the published image is tracked by a nightly-updated issue, and
+everything else is published to the repository's code scanning results rather
+than ignored.
 
 No image can promise a permanent zero-CVE result. A finding with no vendor fix
 cannot be removed safely without replacing the affected component or feature.

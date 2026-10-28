@@ -42,10 +42,16 @@ Every pull request rebuilds the hardened image, scans it with grype, and
 publishes the full result to this repository's code scanning alerts. The
 alerts are an inventory of what is present, not a queue of outstanding work.
 
-**CI blocks on critical findings that have an applicable fix.** That is the
-only class where a change to this repository can turn the check green, so it
-is the only class worth failing a build over. Gating on everything below it
-would leave a required check permanently red and teach people to ignore it.
+**CI blocks on critical findings that have an applicable fix and that the
+change introduces.** That is the only class where a change to this repository
+can turn the check green, so it is the only class worth failing a build over.
+Gating on everything below it would leave a required check permanently red and
+teach people to ignore it.
+
+A fixable critical that is already in the published image, typically because
+an advisory was filed after it shipped, does not fail unrelated pull requests.
+A nightly scan of `latest` tracks it in a single issue that closes itself once
+a rebuild clears it.
 
 Findings are left open, and are expected to be left open, when:
 

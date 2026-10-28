@@ -1,0 +1,82 @@
+name: Published image watch
+
+# The pull request gate only fails on fixable criticals a change introduces.
+# One that reaches the published image because an advisory was filed after
+# the fact is tracked here instead: a single issue that opens when a fixable
+# critical appears, is updated in place while it remains, and closes once the
+# nightly rebuild has cleared it. Editing an issue sends no notification, so a
+# finding that persists for a week costs one email, not seven.
+
+on:
+  schedule:
+    # An hour after the nightly publish, so the scan sees what it shipped.
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: image-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    name: Fixable criticals in the published image
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      issues: write
+    steps:
+      - name: Install grype
+        id: grype
+        uses: anchore/scan-action/download-grype@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+
+      - name: Open, update or close the tracking issue
+        env:
+          GRYPE: ${{ steps.grype.outputs.cmd }}
+          IMAGE: ghcr.io/${{ github.repository_owner }}/pgadmin:latest
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="Published image has fixable critical vulnerabilities"
+
+          "${GRYPE}" -q -o json "registry:${IMAGE}" > scan.json
+          findings="$(jq -r '[.matches[]
+            | select(.vulnerability.severity == "Critical" and .vulnerability.fix.state == "fixed")
+            | "| \(.vulnerability.id) | \(.artifact.name) | \(.artifact.version) | \(.vulnerability.fix.versions | join(", ")) |"]
+            | unique | .[]' scan.json)"
+
+          number="$(gh issue list --state open --search "in:title \"${title}\"" \
+            --json number,title --jq ".[] | select(.title == \"${title}\") | .number" | head -n 1)"
+
+          if [[ -z "${findings}" ]]; then
+            if [[ -n "${number}" ]]; then
+              gh issue close "${number}" --comment "Cleared: [this scan](${RUN_URL}) of \`${IMAGE}\` finds no fixable critical."
+            fi
+            echo "No fixable critical in ${IMAGE}."
+            exit 0
+          fi
+
+          body="$(cat <<EOF
+          [The nightly scan](${RUN_URL}) of \`${IMAGE}\` found fixable critical vulnerabilities.
+
+          | Advisory | Package | Installed | Fixed in |
+          | --- | --- | --- | --- |
+          ${findings}
+
+          The nightly rebuild picks up a fix on its own once it can be applied: an
+          OS package through \`apk upgrade\`, an unpinned Python package through
+          re-resolution. A finding that survives a rebuild is usually held back by
+          a pin in pgAdmin's \`requirements.txt\` and needs a change to the
+          Dockerfile. This issue closes itself once a scan comes back clean.
+          EOF
+          )"
+
+          if [[ -n "${number}" ]]; then
+            gh issue edit "${number}" --body "${body}"
+          else
+            gh issue create --title "${title}" --body "${body}"
+          fi
