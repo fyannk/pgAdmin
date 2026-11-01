@@ -2,8 +2,16 @@ name: Scorecard
 
 # OpenSSF Scorecard audits the repository's own supply-chain posture — pinned
 # actions, token permissions, branch protection, release signing, dangerous
-# workflow patterns — and files what it finds as code-scanning alerts. It is
-# the check that notices when a later change quietly undoes one of them.
+# workflow patterns — and publishes the result as a score. It is the check
+# that notices when a later change quietly undoes one of them.
+#
+# The result is not uploaded to code scanning. Most of what Scorecard flags
+# here is deliberate (base images follow their tags so the nightly rebuild
+# picks up fixes; pgAdmin's requirements are re-resolved, not hash-pinned; a
+# single maintainer merges without required approvals; there is nothing to
+# fuzz), and as alerts those would sit open forever next to the image
+# findings that need acting on. The score moves when posture does; the raw
+# SARIF is kept as an artifact of each run.
 on:
   # No branch_protection_rule trigger. It fires for classic branch protection
   # only, and this repository's protection is a ruleset — editing the ruleset
@@ -31,7 +39,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
-      security-events: write # upload the SARIF to code scanning
       id-token: write # publish the result to the OpenSSF API
       contents: read
       actions: read
@@ -54,9 +61,4 @@ jobs:
         with:
           name: scorecard-results
           path: results.sarif
-          retention-days: 5
-
-      - name: Upload to code scanning
-        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
-        with:
-          sarif_file: results.sarif
+          retention-days: 30
