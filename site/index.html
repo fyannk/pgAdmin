@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="favicon-32.png" sizes="32x32" type="image/png">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <title>Hardened pgAdmin images</title>
+  <meta name="description" content="pgAdmin 4 for restricted OpenShift and Kubernetes: no privileged components, rebuilt when a fix lands, and scanned nightly next to the official image with grype and Trivy.">
+  <link rel="preload" href="fonts/ibm-plex-sans-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="tokens.css">
+  <link rel="stylesheet" href="style.css">
+  <script src="report.js" defer></script>
+</head>
+<body>
+  <header class="page-head">
+    <p class="eyebrow">
+      <img class="mark" src="assets/mark.svg" alt="" width="56" height="63">
+      <a class="wordmark" href="https://github.com/fyannk">fyannk</a><a class="repo" href="https://github.com/fyannk/pgAdmin">fyannk/pgadmin</a></p>
+    <h1>Hardened pgAdmin images</h1>
+    <p class="lede">
+      pgAdmin 4 for restricted OpenShift and Kubernetes, with no privileged
+      component left in the image, and measured in the open. Every night,
+      each variant is scanned next to the official image with two scanners,
+      and this page shows the result, including what is left.
+    </p>
+    <p class="independent">
+      An independent, personal project, not affiliated with, endorsed by or
+      sponsored by the pgAdmin project, the PostgreSQL project, Docker, or any
+      company.
+    </p>
+    <div class="meta" id="meta"><p>Loading the latest scan…</p></div>
+  </header>
+
+  <main>
+    <section aria-labelledby="why-title">
+      <h2 id="why-title">Two variants, one release</h2>
+      <div class="prose">
+        <p>
+          Both variants package the same pgAdmin release and run without any
+          Linux capability, so they fit OpenShift's <code>restricted</code>
+          profile and an arbitrary UID. They differ in how much of the official
+          image they keep.
+        </p>
+        <ul class="points">
+          <li>
+            <strong>Hardened</strong> (<code>&lt;version&gt;-hardened</code>,
+            <code>latest</code>). pgAdmin rebuilt from its release source on
+            fresh Python and Alpine bases, with every OS package upgraded and
+            Python dependencies re-resolved. Postfix, <code>sudo</code>,
+            <code>libcap</code> and every setuid binary are left out. It is
+            rebuilt whenever an input changes, and at least once a week, so
+            fixes reach it without waiting for the next pgAdmin release.
+          </li>
+          <li>
+            <strong>Upstream-compatible</strong> (<code>&lt;version&gt;</code>).
+            The official image with only its capability-bearing Python copy
+            removed. It is published once and never rebuilt, so its findings
+            grow with time; it is here for those who need the official image's
+            behaviour exactly.
+          </li>
+          <li>
+            <strong>Checked before it ships.</strong> Every change is built and
+            checked for those properties before it is merged, and the publish
+            runs the same checks again before any tag moves. A change that
+            introduces a critical finding with an available fix is blocked.
+          </li>
+          <li>
+            <strong>Measured, not claimed.</strong> Each published image comes
+            with its SBOM and a cosign signature, and the comparison below is
+            regenerated every night from public data, with every remaining
+            finding listed.
+          </li>
+        </ul>
+        <pre><code>docker pull ghcr.io/fyannk/pgadmin:latest</code></pre>
+      </div>
+    </section>
+
+    <section aria-labelledby="stable-title">
+      <h2 id="stable-title">Latest release</h2>
+      <p class="muted" id="stable-intro">
+        Each variant of the newest pgAdmin release, next to the official
+        <code>dpage/pgadmin4</code> image of the same release.
+      </p>
+
+      <form class="filters" id="filters" aria-label="Scanner">
+        <fieldset class="segmented">
+          <legend>Scanner</legend>
+          <label><input type="radio" name="scanner" value="grype" checked> grype</label>
+          <label><input type="radio" name="scanner" value="trivy"> Trivy</label>
+        </fieldset>
+      </form>
+
+      <p class="muted squares-key" id="squares-key"></p>
+
+      <div class="stable-layout">
+        <div class="image-cards" id="stable"></div>
+
+        <figure class="card" id="trend">
+          <figcaption>
+            <h3 id="trend-title">Over time</h3>
+            <p class="muted" id="trend-note">One point per nightly scan.</p>
+          </figcaption>
+          <div class="trend-controls">
+            <ul class="legend" id="legend" aria-label="Legend"></ul>
+            <label class="check"><input type="checkbox" id="fixable"> Only findings with a fix</label>
+          </div>
+          <div class="chart" id="chart"></div>
+          <details class="table-view">
+            <summary>Show as a table</summary>
+            <div class="table-wrap"><table id="history-table"></table></div>
+          </details>
+        </figure>
+      </div>
+    </section>
+
+    <section aria-labelledby="all-title">
+      <h2 id="all-title">Both scanners</h2>
+      <p class="muted">
+        Each variant scanned by both scanners, next to the official image.
+      </p>
+      <div class="image-cards" id="all"></div>
+    </section>
+
+    <section aria-labelledby="tags-title">
+      <h2 id="tags-title">Tags</h2>
+      <p class="muted">
+        What each tag points to, as of the last scan. The same tags exist on
+        <code>ghcr.io/fyannk/pgadmin</code> and <code>docker.io/fyannk/pgadmin</code>,
+        and resolve to the same digest.
+      </p>
+      <div class="card table-wrap">
+        <table id="tags"></table>
+      </div>
+    </section>
+
+    <section aria-labelledby="method-title">
+      <h2 id="method-title">How this is measured</h2>
+      <div class="prose">
+        <ul class="points">
+          <li>
+            <strong>Same inventory tool on both sides.</strong> Each image we
+            publish carries an SPDX SBOM produced by Syft at build time. For
+            the official image, Syft is run on <code>dpage/pgadmin4</code> each
+            night, pulled through <code>mirror.gcr.io</code>, Google's mirror of
+            Docker Hub, which serves the same digests. Only
+            <code>linux/amd64</code> is compared, the platform published here.
+          </li>
+          <li>
+            <strong>Two scanners.</strong> grype scans those SBOMs, including
+            the Go standard library compiled into any Go binary (grype's default
+            skips that). Trivy scans the images themselves. They use different
+            vulnerability databases and severity sources, so their counts differ;
+            the gap between ours and the official image is what to compare. The
+            build time of each scanner's advisory database is shown at the top
+            of the page, and flagged when it is more than two days older than
+            the scan.
+          </li>
+          <li>
+            <strong>"With a fix"</strong> means a fixed version of the affected
+            package exists. Some of those cannot be applied here: a fix only in
+            a Python pre-release, or one outside a version pgAdmin pins. The
+            rest are waiting on Alpine, Python or the upstream projects, for
+            ours and the official image alike.
+          </li>
+          <li>
+            <strong>Same release.</strong> Each row compares the same pgAdmin
+            release. The images are built at different times, so OS and Python
+            package versions differ between them; that difference is the point
+            of the hardened variant.
+          </li>
+          <li>
+            Counts are one per advisory and package, per image.
+          </li>
+        </ul>
+        <p id="downloads">
+          The raw data is public: <a href="data/latest.json">latest summary</a>,
+          <a href="data/history.json">history</a>, and, for each variant, every
+          finding and the SBOM of the published image, linked from the tags
+          table above.
+        </p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="page-foot">
+    <p>
+      Generated by <a href="https://github.com/fyannk/pgAdmin/blob/main/.github/workflows/security-report.yml">a nightly workflow</a>.
+      Images are built from <a href="https://github.com/pgadmin-org/pgadmin4">pgadmin-org/pgadmin4</a>
+      and <a href="https://hub.docker.com/r/dpage/pgadmin4">dpage/pgadmin4</a>;
+      this project is not affiliated with either.
+    </p>
+    <p>
+      PostgreSQL® and the Slonik logo are trademarks or registered trademarks
+      of the PostgreSQL Community Association of Canada. This project is not
+      affiliated with or endorsed by the Association.
+    </p>
+  </footer>
+  <noscript><p class="noscript">This report needs JavaScript to render the scan data. The raw data is in <a href="data/latest.json">data/latest.json</a>.</p></noscript>
+</body>
+</html>

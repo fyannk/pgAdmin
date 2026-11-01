@@ -6,70 +6,103 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "pgAdmin version to build (for example 9.16)"
+        description: "pgAdmin version to build (for example 9.16; default: the newest stable release)"
         required: false
         type: string
+      force:
+        description: "Rebuild the hardened image even if no input changed"
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: pgadmin-image-publish
   cancel-in-progress: false
 
-permissions:
-  contents: read
-  packages: write
+# Nothing is granted by default; each job declares exactly what it needs.
+permissions: {}
 
 env:
   IMAGE_NAME: pgadmin
 
 jobs:
-  detect-version:
+  detect:
+    name: Resolve pgAdmin version
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       version: ${{ steps.resolve.outputs.version }}
+      newest: ${{ steps.resolve.outputs.newest }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Resolve target version
         id: resolve
-        shell: bash
         env:
           INPUT_VERSION: ${{ inputs.version || '' }}
         run: |
           set -euo pipefail
-          VERSION="$(.github/scripts/resolve-pgadmin-version.sh "${INPUT_VERSION}")"
-          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
-          echo "Using version: ${VERSION}"
+          newest="$(.github/scripts/resolve-pgadmin-version.sh)"
+          version="$(.github/scripts/resolve-pgadmin-version.sh "${INPUT_VERSION}")"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "newest=${newest}" >> "${GITHUB_OUTPUT}"
+          echo "Building pgAdmin ${version} (newest stable: ${newest})"
 
-  build-and-push:
-    needs: detect-version
+  publish:
+    name: Publish ${{ matrix.variant }}
+    needs: detect
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # push images and signatures to GHCR
+      id-token: write # keyless cosign signature and provenance attestation
+      attestations: write # GitHub artifact attestations
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Immutable: published once when the official release first appears,
+          # never rebuilt afterwards.
+          - variant: upstream
+            file: Dockerfile.upstream
+            context: .
+          # Mutable: rebuilt whenever an input moves, and at least weekly.
+          - variant: hardened
+            file: Dockerfile
+            context: ./pgadmin4
+    env:
+      VARIANT: ${{ matrix.variant }}
+      VERSION: ${{ needs.detect.outputs.version }}
+      NEWEST: ${{ needs.detect.outputs.newest }}
+      REPO: ghcr.io/${{ github.repository_owner }}/pgadmin
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
-      - name: Checkout matching pgAdmin source
+      - name: Check out the matching pgAdmin source
         id: source
-        env:
-          VERSION: ${{ needs.detect-version.outputs.version }}
-        shell: bash
+        if: matrix.variant == 'hardened'
         run: |
           set -euo pipefail
-          if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+$ ]]; then
-            echo "Unsupported pgAdmin version: ${VERSION}" >&2
-            exit 1
-          fi
-
           source_ref="REL-${VERSION/./_}"
           git clone --depth 1 --branch "${source_ref}" \
             https://github.com/pgadmin-org/pgadmin4.git pgadmin4
-
           revision="$(git -C pgadmin4 rev-parse HEAD)"
           echo "revision=${revision}" >> "${GITHUB_OUTPUT}"
           echo "Building pgAdmin ${VERSION} from ${source_ref} (${revision})"
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      # Base images come through Google's Docker Hub mirror, which serves the
+      # same digests without counting against Docker Hub's rate limits. The
+      # builder falls back to Docker Hub if the mirror fails.
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
 
       - name: Login to GHCR
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
@@ -78,123 +111,302 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Check upstream-compatible image publication
-        id: upstream
+      - name: Decide whether the image needs a build
+        id: decide
         env:
-          REF: ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ needs.detect-version.outputs.version }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if docker buildx imagetools inspect "${REF}" >/dev/null 2>&1; then
-            echo "publish=false" >> "${GITHUB_OUTPUT}"
-            echo "${REF} already exists; skipping publish."
-          else
-            echo "publish=true" >> "${GITHUB_OUTPUT}"
-            echo "${REF} is new; it will be published."
-          fi
-
-      - name: Build and push upstream-compatible image
-        if: steps.upstream.outputs.publish == 'true'
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v6
-        with:
-          context: .
-          file: ./Dockerfile.upstream
-          build-args: |
-            VERSION=${{ needs.detect-version.outputs.version }}
-          pull: true
-          push: true
-          provenance: mode=max
-          sbom: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ needs.detect-version.outputs.version }}
-
-      - name: Decide whether the hardened image needs a rebuild
-        id: hardened
-        env:
-          LATEST_REF: ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest
+          FILE: ${{ matrix.file }}
           SOURCE_REVISION: ${{ steps.source.outputs.revision }}
-          RECIPE_REVISION: ${{ github.sha }}
-          # Upper bound on staleness: rebuild anyway after this long so a PyPI
-          # patch release with unchanged base images still gets picked up.
+          FORCE: ${{ inputs.force || false }}
+          # Upper bound on staleness: rebuild the hardened image anyway after
+          # this long so an Alpine or PyPI fix with unchanged base images still
+          # gets picked up.
           MAX_IMAGE_AGE_DAYS: "7"
-        shell: bash
         run: |
           set -euo pipefail
 
-          # Each push of a mutable tag orphans the manifest it replaced, so only
-          # rebuild when an input that actually changes the image has moved.
-          bases=(
-            python:3.15-alpine
-            alpine:3.24
-            postgres:14-alpine3.24
-            postgres:15-alpine3.24
-            postgres:16-alpine3.24
-            postgres:17-alpine3.24
-            postgres:18-alpine3.24
-          )
+          if [[ "${VARIANT}" == "upstream" ]]; then
+            tags=("${VERSION}")
+            build_args="VERSION=${VERSION}"
+            if docker buildx imagetools inspect "${REPO}:${VERSION}" >/dev/null 2>&1; then
+              build=false
+              echo "${REPO}:${VERSION} already exists and is never rebuilt; skipping."
+            else
+              build=true
+              echo "${REPO}:${VERSION} is new; it will be published."
+            fi
+          else
+            tags=("${VERSION}-hardened")
+            # latest follows the newest stable release only, so a manual run
+            # for an older version cannot move it backwards.
+            if [[ "${VERSION}" == "${NEWEST}" ]]; then
+              tags+=(latest)
+            fi
 
-          {
-            echo "source=${SOURCE_REVISION}"
-            echo "recipe=${RECIPE_REVISION}"
-            for ref in "${bases[@]}"; do
-              digest="$(docker buildx imagetools inspect "${ref}" --format '{{.Manifest.Digest}}')"
-              echo "base=${ref}@${digest}"
-            done
-          } | tee /tmp/build-inputs.txt
+            # Each push of a mutable tag orphans the manifest it replaced, so
+            # only rebuild when an input that actually changes the image has
+            # moved: the pgAdmin source, the recipe, or a base image. The
+            # bases are read from the recipe, so a bump there is followed here.
+            # Each input is resolved on its own so a failed lookup fails the
+            # step instead of leaving an empty value in the fingerprint.
+            recipe="$(sha256sum "${FILE}" | cut -d' ' -f1)"
+            bases="$(.github/scripts/base-images.sh "${FILE}")"
+            {
+              echo "source=${SOURCE_REVISION:?}"
+              echo "recipe=${recipe}"
+              while IFS= read -r base; do
+                # Read where the build pulls it from: the mirror for a Docker
+                # Hub image, which serves the same digest, with Docker Hub
+                # itself as the fallback, as the builder does.
+                case "${base}" in
+                  *.*/*) refs=("${base}") ;;
+                  */*) refs=("mirror.gcr.io/${base}" "${base}") ;;
+                  *) refs=("mirror.gcr.io/library/${base}" "${base}") ;;
+                esac
+                digest=""
+                for ref in "${refs[@]}"; do
+                  digest="$(docker buildx imagetools inspect "${ref}" --format '{{.Manifest.Digest}}' 2>/dev/null || true)"
+                  if [[ "${digest}" == sha256:* ]]; then break; fi
+                  echo "::warning::Could not resolve ${ref}" >&2
+                  digest=""
+                done
+                if [[ -z "${digest}" ]]; then
+                  echo "::error::Could not resolve the base image ${base} from ${refs[*]}" >&2
+                  exit 1
+                fi
+                echo "base=${base}@${digest}"
+              done <<<"${bases}"
+            } | tee /tmp/build-inputs.txt
+            fingerprint="$(sha256sum /tmp/build-inputs.txt | cut -d' ' -f1)"
+            build_args="$(printf '%s\n' \
+              "VERSION=${VERSION}" \
+              "SOURCE_REVISION=${SOURCE_REVISION}" \
+              "BUILD_INPUTS=${fingerprint}")"
 
-          fingerprint="$(sha256sum /tmp/build-inputs.txt | cut -d' ' -f1)"
-          echo "fingerprint=${fingerprint}" >> "${GITHUB_OUTPUT}"
+            image_json="$(
+              docker buildx imagetools inspect "${REPO}:${VERSION}-hardened" \
+                --format '{{ json .Image }}' 2>/dev/null || true
+            )"
+            published=""
+            age_days=99999
+            if [[ -n "${image_json}" ]]; then
+              published="$(jq -r '.config.Labels["io.fyannk.pgadmin.inputs"] // empty' <<<"${image_json}")"
+              created="$(jq -r '.created // empty' <<<"${image_json}")"
+              if [[ -n "${created}" ]]; then
+                age_days=$(( ( $(date -u +%s) - $(date -u -d "${created}" +%s) ) / 86400 ))
+              fi
+            fi
 
-          image_json="$(
-            docker buildx imagetools inspect "${LATEST_REF}" \
-              --format '{{ json .Image }}' 2>/dev/null || true
-          )"
-
-          published=""
-          age_days=99999
-          if [[ -n "${image_json}" ]]; then
-            published="$(jq -r '.config.Labels["io.fyannk.pgadmin.inputs"] // empty' <<<"${image_json}")"
-            created="$(jq -r '.created // empty' <<<"${image_json}")"
-            if [[ -n "${created}" ]]; then
-              age_days=$(( ( $(date -u +%s) - $(date -u -d "${created}" +%s) ) / 86400 ))
+            echo "${REPO}:${VERSION}-hardened"
+            echo "  published fingerprint: ${published:-<none>}"
+            echo "  current fingerprint:   ${fingerprint}"
+            echo "  published age:         ${age_days} day(s)"
+            build=false
+            if [[ "${published}" != "${fingerprint}" || "${age_days}" -ge "${MAX_IMAGE_AGE_DAYS}" || "${FORCE}" == "true" ]]; then
+              build=true
+              echo "Rebuilding."
+            else
+              echo "No input changed and the published image is still fresh; skipping."
             fi
           fi
 
-          echo "published fingerprint: ${published:-<none>}"
-          echo "current fingerprint:   ${fingerprint}"
-          echo "published age:         ${age_days} day(s)"
+          {
+            echo "build=${build}"
+            echo "build-args<<EOF"
+            echo "${build_args}"
+            echo "EOF"
+            echo "tags<<EOF"
+            for tag in "${tags[@]}"; do echo "${REPO}:${tag}"; done
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
 
-          if [[ "${published}" == "${fingerprint}" && "${age_days}" -lt "${MAX_IMAGE_AGE_DAYS}" ]]; then
-            echo "rebuild=false" >> "${GITHUB_OUTPUT}"
-            echo "No input changed and the published image is still fresh; skipping the push."
-          else
-            echo "rebuild=true" >> "${GITHUB_OUTPUT}"
-            echo "Rebuilding."
-          fi
-
-      - name: Build and push hardened image
-        if: steps.hardened.outputs.rebuild == 'true'
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v6
+      # Built and checked locally first, so a broken image is never pushed.
+      # Every layer goes to a local cache that the push below builds from, so
+      # what is pushed is the image that was checked, not a second build.
+      - name: Build image
+        if: steps.decide.outputs.build == 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
-          context: ./pgadmin4
-          file: ./Dockerfile
-          build-args: |
-            VERSION=${{ needs.detect-version.outputs.version }}
-            SOURCE_REVISION=${{ steps.source.outputs.revision }}
-            BUILD_INPUTS=${{ steps.hardened.outputs.fingerprint }}
+          context: ${{ matrix.context }}
+          file: ./${{ matrix.file }}
+          build-args: ${{ steps.decide.outputs.build-args }}
           pull: true
-          push: true
+          load: true
+          tags: pgadmin-publish:candidate
+          cache-to: type=local,dest=/tmp/build-cache,mode=max
+
+      - name: Image keeps its guarantees
+        if: steps.decide.outputs.build == 'true'
+        run: .github/scripts/check-image.sh pgadmin-publish:candidate "${VARIANT}"
+
+      # Pushed by digest, without tags: nothing users pull changes until the
+      # pushed image has been verified below and its digest promoted.
+      - name: Push image
+        id: push
+        if: steps.decide.outputs.build == 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ matrix.context }}
+          file: ./${{ matrix.file }}
+          build-args: ${{ steps.decide.outputs.build-args }}
+          cache-from: type=local,src=/tmp/build-cache
+          outputs: type=image,"name=${{ env.REPO }}",push-by-digest=true,name-canonical=true,push=true
           provenance: mode=max
           sbom: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ needs.detect-version.outputs.version }}-hardened
-            ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest
 
-      # Prune untagged manifests that no tagged index references. Do not enable
-      # delete-ghost-images: it can delete tagged release versions.
-      - name: Prune orphaned GHCR manifests
-        uses: dataaxiom/ghcr-cleanup-action@d52806a0dc70b430571a37da1fde39733ffd640f # v1.2.2
+      # A cache miss between the two builds, for example a base image pushed in
+      # the minutes between them, would publish an image that was never
+      # checked. Compare the uncompressed layers and the runtime configuration,
+      # so it cannot pass silently. The release tags have not moved yet, so a
+      # failure here leaves users on the previous image and the next run
+      # rebuilds.
+      - name: Pushed image is the checked image
+        if: steps.decide.outputs.build == 'true'
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          runtime='{Env, Entrypoint, Cmd, User, WorkingDir, ExposedPorts, Volumes, StopSignal, Labels}
+            | map_values(if . == null or . == "" or . == [] or . == {} then null else . end)'
+          checked="$(docker image inspect pgadmin-publish:candidate --format '{{json .}}' \
+            | jq -cS "{layers: .RootFS.Layers, config: (.Config | ${runtime})}")"
+          pushed="$(docker buildx imagetools inspect "${REPO}@${DIGEST}" --format '{{json .Image}}' \
+            | jq -cS "{layers: .rootfs.diff_ids, config: (.config | ${runtime})}")"
+          if [[ "${checked}" != "${pushed}" ]]; then
+            echo "::error::${REPO}@${DIGEST} differs from the image check-image.sh passed; no tag was moved"
+            echo "checked: ${checked}"
+            echo "pushed:  ${pushed}"
+            exit 1
+          fi
+          echo "${REPO}@${DIGEST} matches the checked candidate."
+
+      - name: Install cosign
+        if: steps.decide.outputs.build == 'true'
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      # Signed keylessly with this workflow's GitHub identity, and recorded in
+      # Sigstore's public transparency log. The signature covers the index
+      # digest, and through it the image, its SBOM and its provenance. It is
+      # made before the tags move, so no tag ever serves an unsigned image,
+      # and checked the way users are told to check it.
+      - name: Sign the verified image
+        if: steps.decide.outputs.build == 'true'
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+          IDENTITY: ${{ github.server_url }}/${{ github.workflow_ref }}
+        run: |
+          set -euo pipefail
+          cosign sign --yes "${REPO}@${DIGEST}"
+          cosign verify "${REPO}@${DIGEST}" \
+            --certificate-identity "${IDENTITY}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com >/dev/null
+          echo "${REPO}@${DIGEST} is signed by ${IDENTITY}."
+
+      # A GitHub artifact attestation of the verified digest, alongside the
+      # BuildKit provenance pushed with the image: `gh attestation verify`
+      # checks it against this repository without a cosign identity.
+      - name: Attest the verified image
+        if: steps.decide.outputs.build == 'true'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.REPO }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      # The tags are pointed at the verified digest itself, so what they serve
+      # is exactly what was compared above, attestations included.
+      - name: Move the release tags to the verified image
+        if: steps.decide.outputs.build == 'true'
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+          TAGS: ${{ steps.decide.outputs.tags }}
+        run: |
+          set -euo pipefail
+          args=()
+          while IFS= read -r tag; do
+            args+=(--tag "${tag}")
+          done <<<"${TAGS}"
+          docker buildx imagetools create "${args[@]}" "${REPO}@${DIGEST}"
+          for tag in ${TAGS}; do
+            resolved="$(docker buildx imagetools inspect "${tag}" --format '{{json .Manifest}}' | jq -r .digest)"
+            [[ "${resolved}" == "${DIGEST}" ]] || { echo "::error::${tag} resolves to ${resolved}, expected ${DIGEST}"; exit 1; }
+            echo "${tag} -> ${DIGEST}"
+          done
+
+  # Copy what GHCR now serves to Docker Hub, from one job, so Docker Hub sees a
+  # few sequential requests instead of every publish job at once (an account
+  # gets 200 registry requests an hour). Runs even when a publish job failed,
+  # to mirror the one that succeeded; anything missed is mirrored by the next
+  # run.
+  dockerhub:
+    name: Mirror to Docker Hub
+    needs: [detect, publish]
+    if: always() && needs.detect.result == 'success' && needs.publish.result != 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: read
+    env:
+      HUB_ENABLED: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
+      GRACE_DAYS: "7"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+        if: env.HUB_ENABLED == 'true'
+
+      - name: Login to GHCR
+        if: env.HUB_ENABLED == 'true'
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Login to Docker Hub
+        if: env.HUB_ENABLED == 'true'
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Mirror the tags
+        if: env.HUB_ENABLED == 'true'
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+        run: .github/scripts/sync-dockerhub.sh "ghcr.io/${OWNER}/${IMAGE_NAME}" "${OWNER}/${IMAGE_NAME}"
+
+      # An image the mirror replaced stays pullable by digest for a week, as
+      # on GHCR. The Hub manifests API this relies on is not in Docker's
+      # published reference, so a failure warns instead of failing the run.
+      - name: Prune replaced images
+        if: always() && env.HUB_ENABLED == 'true'
+        continue-on-error: true
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+        run: .github/scripts/prune-dockerhub.sh "${OWNER}/${IMAGE_NAME}" "${GRACE_DAYS}"
+
+  # Prune untagged GHCR manifests that no tagged index references, once they
+  # have been untagged for a week: an image replaced by a newer push stays
+  # pullable by digest long enough for anyone pinning it to move on. Do not
+  # enable delete-ghost-images: it can delete tagged release versions.
+  prune:
+    name: Prune replaced GHCR images
+    needs: publish
+    if: always() && needs.publish.result != 'cancelled'
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write # delete replaced manifests
+    steps:
+      - uses: dataaxiom/ghcr-cleanup-action@d52806a0dc70b430571a37da1fde39733ffd640f # v1.2.2
         with:
           package: ${{ env.IMAGE_NAME }}
           delete-untagged: true
+          # Signatures of images deleted above, stored as sha256-<digest> tags.
+          delete-orphaned-images: true
+          older-than: 7 days
           validate: true

@@ -39,8 +39,10 @@ coordinated disclosure date has been agreed.
 ## How scan findings are triaged
 
 Every pull request rebuilds the hardened image, scans it with grype, and
-publishes the full result to this repository's code scanning alerts. The
-alerts are an inventory of what is present, not a queue of outstanding work.
+publishes the findings that have a fix to this repository's code scanning
+alerts, so the alerts list what a rebuild or a recipe change can clear. The
+full inventory, fixed or not, for both variants and the official image, is on
+the nightly [security report](https://fyannk.github.io/pgAdmin/).
 
 **CI blocks on critical findings that have an applicable fix and that the
 change introduces.** That is the only class where a change to this repository
@@ -67,10 +69,10 @@ Findings are left open, and are expected to be left open, when:
 
 An alert is dismissed only when the vulnerable code path is demonstrably
 unreachable in this image, and the dismissal comment records the evidence.
-"No fix available" is not a reason to dismiss: those findings stay visible so
-they resolve on their own when upstream ships.
+Findings with no fix are not raised as alerts; they stay visible on the report
+and become an alert once a fix exists that the published image lacks.
 
-To see only what is actionable:
+To see only what is actionable, as the alerts do:
 
 ```text
 grype ghcr.io/fyannk/pgadmin:latest --only-fixed
