@@ -12,6 +12,9 @@ updates:
       time: "06:30"
       timezone: Europe/Paris
     open-pull-requests-limit: 5
+    # A release gets a week to be pulled or patched before it is proposed.
+    cooldown:
+      default-days: 7
     # Only the hardened recipe's bases are Dependabot's to move. The
     # upstream-compatible image is a mirror of an official pgAdmin release:
     # which release it tracks is decided by the publish workflow, which
@@ -40,6 +43,9 @@ updates:
       time: "06:45"
       timezone: Europe/Paris
     open-pull-requests-limit: 5
+    # A release gets a week to be pulled or patched before it is proposed.
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "ci(deps)"
     groups:

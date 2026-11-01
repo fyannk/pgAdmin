@@ -20,7 +20,16 @@ The hardened variant also:
   postfix startup block in its entrypoint;
 - has no setuid or setgid file anywhere in the exported filesystem;
 - keeps `pip` and `wheel` out of the runtime virtual environment;
-- ships the PostgreSQL 14–18 client utilities pgAdmin calls.
+- ships the PostgreSQL 14–18 client utilities pgAdmin calls, each of which
+  runs and reports its own major version;
+- boots on a read-only root filesystem behind a path prefix
+  (`SCRIPT_NAME=/pgadmin`) with proxy-supplied identity, and answers
+  `/pgadmin/misc/ping`.
+
+The workflows themselves are audited by actionlint and zizmor on every pull
+request, by CodeQL, and weekly by OpenSSF Scorecard. An informational job
+builds the hardened recipe for `linux/arm64` under QEMU, ahead of publishing
+that platform.
 
 The hardened image is also scanned with grype. The gate blocks on critical
 findings with an applicable fix that the change introduces; one already in the

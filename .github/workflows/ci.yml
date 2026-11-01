@@ -23,10 +23,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Workflow syntax
         run: |
           docker run --rm -v "${PWD}:/repo" -w /repo "${ACTIONLINT_IMAGE}" -color
+
+      # Audits the workflows for injection, over-broad permissions, unpinned
+      # actions and credential persistence. Offline so a fork pull request
+      # without a token still gets the same answer.
+      - name: Workflow security audit
+        uses: zizmorcore/zizmor-action@53290badfa369cb0bf7ad16342cb62c2fa47ac7b # v0.8.0
+        with:
+          advanced-security: false
+          online-audits: false
 
       - name: Dockerfile rules
         run: |
@@ -67,6 +78,7 @@ jobs:
             https://github.com/pgadmin-org/pgadmin4.git pgadmin4
           docker buildx build --check --build-arg VERSION="${VERSION}" -f Dockerfile.upstream .
           docker buildx build --check --build-arg VERSION="${VERSION}" -f Dockerfile ./pgadmin4
+          docker buildx build --check --platform linux/arm64 --build-arg VERSION="${VERSION}" -f Dockerfile ./pgadmin4
 
   build:
     name: Build images
@@ -75,6 +87,8 @@ jobs:
       version: ${{ steps.source.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Check out the matching pgAdmin source
         id: source
@@ -95,7 +109,7 @@ jobs:
               mirrors = ["mirror.gcr.io"]
 
       - name: Build upstream-compatible image
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ./Dockerfile.upstream
@@ -111,7 +125,7 @@ jobs:
         run: .github/scripts/check-image.sh pgadmin-ci:upstream upstream
 
       - name: Build hardened image
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: ./pgadmin4
           file: ./Dockerfile
@@ -148,10 +162,58 @@ jobs:
         run: docker load --input /tmp/hardened.tar
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       # The same checks the publish runs before it moves a tag.
       - name: Hardened image keeps its guarantees
         run: .github/scripts/check-image.sh pgadmin-ci:hardened hardened
+
+  # The published images are amd64 only. This job measures whether the
+  # hardened recipe builds under QEMU (the Python wheel compilation is the
+  # expected bottleneck). It is informational until it is reliably green and
+  # fast enough; only then add linux/arm64 to the publish.
+  build-arm64:
+    name: Build hardened image (arm64, informational)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Check out the matching pgAdmin source
+        id: source
+        run: |
+          set -euo pipefail
+          version="$(.github/scripts/resolve-pgadmin-version.sh)"
+          git clone --depth 1 --branch "REL-${version/./_}" \
+            https://github.com/pgadmin-org/pgadmin4.git pgadmin4
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: arm64
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
+
+      - name: Build for linux/arm64
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ./pgadmin4
+          file: ./Dockerfile
+          platforms: linux/arm64
+          build-args: |
+            VERSION=${{ steps.source.outputs.version }}
+            BUILD_INPUTS=ci-arm64
+          push: false
+          cache-from: type=gha,scope=hardened-arm64
+          cache-to: type=gha,mode=max,scope=hardened-arm64
 
   scan:
     name: Vulnerability scan

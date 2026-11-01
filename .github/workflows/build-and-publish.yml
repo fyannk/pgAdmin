@@ -19,8 +19,8 @@ concurrency:
   group: pgadmin-image-publish
   cancel-in-progress: false
 
-permissions:
-  contents: read
+# Nothing is granted by default; each job declares exactly what it needs.
+permissions: {}
 
 env:
   IMAGE_NAME: pgadmin
@@ -29,11 +29,15 @@ jobs:
   detect:
     name: Resolve pgAdmin version
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       version: ${{ steps.resolve.outputs.version }}
       newest: ${{ steps.resolve.outputs.newest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Resolve target version
         id: resolve
@@ -53,8 +57,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
-      id-token: write # keyless cosign signing
+      packages: write # push images and signatures to GHCR
+      id-token: write # keyless cosign signature and provenance attestation
+      attestations: write # GitHub artifact attestations
     strategy:
       fail-fast: false
       matrix:
@@ -75,6 +80,8 @@ jobs:
       REPO: ghcr.io/${{ github.repository_owner }}/pgadmin
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Check out the matching pgAdmin source
         id: source
@@ -217,7 +224,7 @@ jobs:
       # what is pushed is the image that was checked, not a second build.
       - name: Build image
         if: steps.decide.outputs.build == 'true'
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: ${{ matrix.context }}
           file: ./${{ matrix.file }}
@@ -236,7 +243,7 @@ jobs:
       - name: Push image
         id: push
         if: steps.decide.outputs.build == 'true'
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: ${{ matrix.context }}
           file: ./${{ matrix.file }}
@@ -294,6 +301,17 @@ jobs:
             --certificate-oidc-issuer https://token.actions.githubusercontent.com >/dev/null
           echo "${REPO}@${DIGEST} is signed by ${IDENTITY}."
 
+      # A GitHub artifact attestation of the verified digest, alongside the
+      # BuildKit provenance pushed with the image: `gh attestation verify`
+      # checks it against this repository without a cosign identity.
+      - name: Attest the verified image
+        if: steps.decide.outputs.build == 'true'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.REPO }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
       # The tags are pointed at the verified digest itself, so what they serve
       # is exactly what was compared above, attestations included.
       - name: Move the release tags to the verified image
@@ -333,6 +351,8 @@ jobs:
       GRACE_DAYS: "7"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
         if: env.HUB_ENABLED == 'true'
 
       - name: Login to GHCR
@@ -380,7 +400,7 @@ jobs:
     if: always() && needs.publish.result != 'cancelled'
     runs-on: ubuntu-latest
     permissions:
-      packages: write
+      packages: write # delete replaced manifests
     steps:
       - uses: dataaxiom/ghcr-cleanup-action@d52806a0dc70b430571a37da1fde39733ffd640f # v1.2.2
         with:

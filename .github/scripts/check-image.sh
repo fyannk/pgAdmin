@@ -14,6 +14,14 @@ case "${variant}" in
   *) echo "unknown variant: ${variant}" >&2; exit 2 ;;
 esac
 fail=0
+smoke="pgadmin-smoke-$$"
+network="pgadmin-smoke-$$"
+# shellcheck disable=SC2317,SC2329 # invoked by the EXIT trap
+cleanup() {
+  docker rm -f "${smoke}" >/dev/null 2>&1 || true
+  docker network rm "${network}" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
 
 echo "::group::Runs unprivileged by default"
 user="$(docker image inspect "${image}" --format '{{.Config.User}}')"
@@ -101,19 +109,66 @@ if ! docker run --rm --entrypoint sh "${image}" \
 fi
 echo "::endgroup::"
 
-echo "::group::PostgreSQL client utilities are present"
+# Executing each binary catches a missing shared library or a wrong
+# architecture, which a mode-bit test cannot.
+echo "::group::PostgreSQL client utilities run"
 if ! docker run --rm --entrypoint sh "${image}" -c '
   set -e
   for major in 14 15 16 17 18; do
     for tool in pg_dump pg_dumpall pg_restore psql; do
-      test -x "/usr/local/pgsql-${major}/${tool}"
+      out="$("/usr/local/pgsql-${major}/${tool}" --version)"
+      echo "${out}"
+      case "${out}" in
+        *" ${major}."*) ;;
+        *) echo "${tool} for ${major} reports: ${out}" >&2; exit 1 ;;
+      esac
     done
   done
-  echo "client tools ok"
 '; then
-  echo "FAIL: a PostgreSQL client utility is missing"
+  echo "FAIL: a PostgreSQL client utility is missing or does not run"
   fail=1
 fi
+echo "::endgroup::"
+
+# Behind a path-prefixing proxy with proxy-supplied identity, on a read-only
+# root filesystem: the most restricted way the image is run. The probe goes
+# through a user network from a second container, as a proxy would reach it,
+# rather than through a published host port.
+echo "::group::Boots read-only and serves /misc/ping under SCRIPT_NAME"
+docker network create "${network}" >/dev/null
+docker run -d --name "${smoke}" --network "${network}" --read-only \
+  --tmpfs /tmp \
+  --tmpfs /var/lib/pgadmin:uid=5050,gid=0,mode=0770 \
+  --tmpfs /run/pgadmin:uid=5050,gid=0,mode=0770 \
+  --tmpfs /var/log/pgadmin:uid=5050,gid=0,mode=0770 \
+  -e SCRIPT_NAME=/pgadmin \
+  -e PGADMIN_LISTEN_PORT=8080 \
+  -e PGADMIN_DEFAULT_EMAIL=smoke@example.com \
+  -e PGADMIN_DEFAULT_PASSWORD=smoke-test-only \
+  -e PGADMIN_CONFIG_AUTHENTICATION_SOURCES="['webserver']" \
+  -e PGADMIN_CONFIG_WEBSERVER_REMOTE_USER="'X-Forwarded-User'" \
+  -e PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED=False \
+  "${image}" >/dev/null
+booted=false
+for attempt in $(seq 1 60); do
+  if body="$(docker run --rm --network "${network}" --entrypoint wget "${image}" \
+       -qO- "http://${smoke}:8080/pgadmin/misc/ping" 2>/dev/null)" && grep -q PING <<<"${body}"; then
+    echo "ping answered after ${attempt} attempt(s): ${body}"
+    booted=true
+    break
+  fi
+  if [[ "$(docker inspect -f '{{.State.Running}}' "${smoke}")" != "true" ]]; then
+    echo "the container exited before answering"
+    break
+  fi
+  sleep 2
+done
+if [[ "${booted}" != "true" ]]; then
+  docker logs "${smoke}" 2>&1 | tail -n 50 || true
+  echo "FAIL: /pgadmin/misc/ping did not answer"
+  fail=1
+fi
+cleanup
 echo "::endgroup::"
 
 exit "${fail}"

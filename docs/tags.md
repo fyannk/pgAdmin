@@ -44,6 +44,13 @@ cosign verify "ghcr.io/fyannk/pgadmin@${digest}" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
+Each image also carries a GitHub artifact attestation of its build
+provenance, which the GitHub CLI checks against this repository:
+
+```text
+gh attestation verify oci://ghcr.io/fyannk/pgadmin:latest --repo fyannk/pgAdmin
+```
+
 The signature covers the image index, and through it the image, its SBOM and
 its provenance attestation. Hardened images published before signing was
 introduced are signed when they are next rebuilt, which happens at least
