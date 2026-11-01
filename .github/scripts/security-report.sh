@@ -12,10 +12,14 @@
 #                           history at $HISTORY_URL when it can be fetched
 #   sboms/<name>.spdx.json  the SBOM attached to each published image
 #
-# Both sides are inventoried by Syft so the comparison is like for like: ours
-# from the SBOM attached at publish time, upstream by running Syft on the
-# official image (its own attestations come from Docker Scout, which grype
-# cannot read distribution packages from). grype scans those SBOMs. Trivy
+# Both sides are inventoried by the same Syft, run here on the pulled image,
+# so the comparison is like for like. The SBOM attached at publish time comes
+# from the Syft bundled in BuildKit, whose version and settings are not this
+# script's: an older one read the SBOMs Python wheels embed and counted Pillow
+# three times, each copy matching its own advisories. It is still published
+# for download, as what ships with the image, but nothing is counted from it.
+# The official image's own attestations come from Docker Scout, which grype
+# cannot read distribution packages from. grype scans the Syft SBOMs. Trivy
 # scans the images themselves: it does not detect the distribution in a Syft
 # SPDX document and would silently report nothing.
 #
@@ -103,12 +107,11 @@ scan() {
   created="$(docker image inspect "${ref}" --format '{{.Created}}')"
 
   # By digest, not tag: a publish moving the tag mid-run must not pair this
-  # image's scans with another image's SBOM.
+  # image with another image's attached SBOM.
   if [[ "${sbom_source}" == "attached" ]]; then
-    docker buildx imagetools inspect "${ref%:*}@${digest}" --format '{{json .SBOM.SPDX}}' > "${base}.spdx.json"
-  else
-    "${SYFT}" -q "docker:${ref}" -o "spdx-json=${base}.spdx.json"
+    docker buildx imagetools inspect "${ref%:*}@${digest}" --format '{{json .SBOM.SPDX}}' > "${base}.attached.spdx.json" || true
   fi
+  "${SYFT}" -q "docker:${ref}" -o "spdx-json=${base}.spdx.json"
   if ! jq -e '.packages | length > 0' "${base}.spdx.json" >/dev/null 2>&1; then
     echo "::warning::${ref} has no usable SBOM"
     jq -n --arg ref "${ref}" --arg digest "${digest}" '{ref: $ref, digest: $digest, error: "no SBOM"}' > "${base}.json"
@@ -143,8 +146,8 @@ while IFS= read -r entry; do
   tag="$(jq -r .tag <<<"${entry}")"
   echo "::group::${name}"
   scan ours "${name}" "${REPO}:${tag}" attached
-  if [[ -f "${work}/ours-${name}.spdx.json" ]] && jq -e '.packages | length > 0' "${work}/ours-${name}.spdx.json" >/dev/null; then
-    cp "${work}/ours-${name}.spdx.json" "${out}/sboms/${name}.spdx.json"
+  if [[ -f "${work}/ours-${name}.attached.spdx.json" ]] && jq -e '.packages | length > 0' "${work}/ours-${name}.attached.spdx.json" >/dev/null 2>&1; then
+    cp "${work}/ours-${name}.attached.spdx.json" "${out}/sboms/${name}.spdx.json"
   fi
   jq -n --argjson entry "${entry}" --arg version "${version}" \
     --slurpfile ours "${work}/ours-${name}.json" --slurpfile up "${work}/upstream-official.json" '
