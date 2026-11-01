@@ -34,6 +34,17 @@ jobs:
           docker run --rm -v "${PWD}:/repo" -w /repo "${HADOLINT_IMAGE}" \
             hadolint Dockerfile Dockerfile.upstream
 
+      - name: Shell scripts
+        run: shellcheck .github/scripts/*.sh
+
+      # The publish fingerprints the hardened image on the bases this reads
+      # from the recipe; a recipe it cannot parse should fail here, not there.
+      - name: Base images resolve from the recipes
+        run: |
+          set -euo pipefail
+          .github/scripts/base-images.sh Dockerfile
+          .github/scripts/base-images.sh Dockerfile.upstream
+
       - name: Resolve pgAdmin version
         id: version
         run: |
@@ -75,7 +86,13 @@ jobs:
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
           echo "revision=$(git -C pgadmin4 rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
 
+      # Base images through Google's Docker Hub mirror, as in the publish,
+      # so pull requests do not depend on Docker Hub's anonymous rate limit.
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
 
       - name: Build upstream-compatible image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v6
@@ -89,6 +106,9 @@ jobs:
           tags: pgadmin-ci:upstream
           cache-from: type=gha,scope=upstream
           cache-to: type=gha,mode=max,scope=upstream
+
+      - name: Upstream-compatible image keeps its guarantees
+        run: .github/scripts/check-image.sh pgadmin-ci:upstream upstream
 
       - name: Build hardened image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v6
@@ -127,93 +147,11 @@ jobs:
       - name: Load the image under test
         run: docker load --input /tmp/hardened.tar
 
-      - name: Runs unprivileged by default
-        run: |
-          set -euo pipefail
-          user="$(docker image inspect pgadmin-ci:hardened --format '{{.Config.User}}')"
-          echo "Config.User=${user}"
-          [[ "${user}" == "5050" ]]
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - name: Privileged components are absent
-        run: |
-          set -euo pipefail
-          fail=0
-          installed="$(docker run --rm --entrypoint apk pgadmin-ci:hardened info)"
-          for pkg in postfix sudo libcap libcap-utils; do
-            if grep -qx "${pkg}" <<<"${installed}"; then
-              echo "FAIL: ${pkg} is installed"
-              fail=1
-            fi
-          done
-
-          # The capability-bearing interpreter copy is the whole reason this
-          # image exists; make sure no rebuild reintroduces it.
-          if docker run --rm --entrypoint sh pgadmin-ci:hardened \
-               -c 'test -e /usr/local/bin/python3-cap -o -e /venv/bin/python3-cap'; then
-            echo "FAIL: a python3-cap binary is present"
-            fail=1
-          fi
-
-          if docker run --rm --entrypoint grep pgadmin-ci:hardened \
-               -q 'Start Postfix' /entrypoint.sh; then
-            echo "FAIL: the postfix startup block survived"
-            fail=1
-          fi
-
-          # Read the exported filesystem rather than searching from inside a
-          # container, so every directory is visible without running as root.
-          cid="$(docker create pgadmin-ci:hardened)"
-          setuid="$(docker export "${cid}" | tar -tvf - | awk '$1 ~ /^-(..[sS]|.....[sS])/')"
-          docker rm "${cid}" >/dev/null
-          if [[ -n "${setuid}" ]]; then
-            echo "FAIL: setuid/setgid binaries are present:"
-            echo "${setuid}"
-            fail=1
-          fi
-
-          exit "${fail}"
-
-      - name: Build-time Python tooling stays out of the runtime venv
-        run: |
-          set -euo pipefail
-          fail=0
-          for pkg in pip wheel; do
-            if docker run --rm --entrypoint sh pgadmin-ci:hardened \
-                 -c "ls -d /venv/lib/python3*/site-packages/${pkg}-*.dist-info" >/dev/null 2>&1; then
-              echo "FAIL: ${pkg} is installed in /venv"
-              fail=1
-            fi
-          done
-          # setuptools is a genuine runtime dependency from requirements.txt.
-          docker run --rm --entrypoint sh pgadmin-ci:hardened \
-            -c 'ls -d /venv/lib/python3*/site-packages/setuptools-*.dist-info' >/dev/null
-          exit "${fail}"
-
-      - name: Arbitrary UID can start the application
-        run: |
-          set -euo pipefail
-          # OpenShift assigns an unpredictable UID in the root group, which
-          # works only while /etc/passwd stays group-writable.
-          docker run --rm --user 12345:0 --entrypoint sh pgadmin-ci:hardened -c '
-            set -e
-            test -w /etc/passwd
-            test -w /var/lib/pgadmin
-            test -w /run/pgadmin
-            /venv/bin/python3 -c "import psycopg, flask, gunicorn; print(\"imports ok\")"
-          '
-
-      - name: PostgreSQL client utilities are present
-        run: |
-          set -euo pipefail
-          docker run --rm --entrypoint sh pgadmin-ci:hardened -c '
-            set -e
-            for major in 14 15 16 17 18; do
-              for tool in pg_dump pg_dumpall pg_restore psql; do
-                test -x "/usr/local/pgsql-${major}/${tool}"
-              done
-            done
-            echo "client tools ok"
-          '
+      # The same checks the publish runs before it moves a tag.
+      - name: Hardened image keeps its guarantees
+        run: .github/scripts/check-image.sh pgadmin-ci:hardened hardened
 
   scan:
     name: Vulnerability scan
@@ -285,26 +223,29 @@ jobs:
           fi
           echo "No fixable critical introduced by this change."
 
-      - name: Full inventory
+      # Only findings with a fix go to the Security tab, so it lists what a
+      # rebuild or a recipe change can clear. Alpine and PyPI packages with no
+      # fix yet would otherwise bury those under alerts nobody can act on; the
+      # full inventory is in the SBOM attached to every published image.
+      - name: Fixable findings
         if: always()
         id: full
         uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
         with:
           image: pgadmin-ci:hardened
           fail-build: false
+          only-fixed: true
           output-format: sarif
 
-      # Code scanning is where the non-gating findings live, so a high with no
-      # applicable fix stays visible and tracked instead of silently passing.
       - name: Publish to code scanning
-        if: always()
+        if: always() && steps.full.outputs.sarif != ''
         uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
         with:
           sarif_file: ${{ steps.full.outputs.sarif }}
           category: grype-hardened
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        if: always()
+        if: always() && steps.full.outputs.sarif != ''
         with:
           name: vulnerability-report
           path: ${{ steps.full.outputs.sarif }}
