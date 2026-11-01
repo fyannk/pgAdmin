@@ -19,7 +19,9 @@ The hardened variant also:
 - has no `postfix`, `sudo`, `libcap` or `libcap-utils` package, and no
   postfix startup block in its entrypoint;
 - has no setuid or setgid file anywhere in the exported filesystem;
-- keeps `pip` and `wheel` out of the runtime virtual environment;
+- keeps `pip` and `wheel` out of the runtime virtual environment, and carries
+  no other pip either: the base image's own is removed, since the venv can
+  import from system site-packages;
 - ships the PostgreSQL 14–18 client utilities pgAdmin calls, each of which
   runs and reports its own major version;
 - boots on a read-only root filesystem behind a path prefix
@@ -41,9 +43,12 @@ with a fix is published to the repository's code scanning results. See
 
 [fyannk.github.io/pgAdmin](https://fyannk.github.io/pgAdmin/) compares both
 variants of the newest pgAdmin release with the official `dpage/pgadmin4`
-image each night, using two scanners. Every side is inventoried with Syft:
-ours from the SBOM attached when it is published, the official image by
-running Syft on it. grype scans those SBOMs and Trivy scans the images. For
+image each night, using two scanners. Every image, ours and the official
+one, is inventoried by the same Syft, run on the image that night. The SBOM
+attached when an image is published comes from the Syft bundled in BuildKit,
+whose version is not ours to pick; an older one counted Pillow three times
+from the SBOM its wheel embeds, so it is published as shipped but not counted
+from. grype scans the Syft SBOMs and Trivy scans the images. For
 each variant, side and scanner, the page shows every severity as "with a fix /
 all findings", with the trend over time and the digest each tag points to. The
 page also records when each scanner's advisory database was built, and flags

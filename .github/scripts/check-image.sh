@@ -101,6 +101,14 @@ for pkg in pip wheel; do
     fail=1
   fi
 done
+# Nor anywhere else the venv can import from: it sees system site-packages,
+# where the base image's pip would carry its own vendored libraries.
+if docker run --rm --entrypoint sh "${image}" -c '
+     /venv/bin/python3 -c "import pip" 2>/dev/null ||
+     ls -d /usr/local/lib/python3*/site-packages/pip /usr/local/lib/python3*/ensurepip/_bundled/*.whl /usr/local/bin/pip* 2>/dev/null | grep -q .'; then
+  echo "FAIL: a pip installation is present outside the build"
+  fail=1
+fi
 # setuptools is a genuine runtime dependency from requirements.txt.
 if ! docker run --rm --entrypoint sh "${image}" \
      -c 'ls -d /venv/lib/python3*/site-packages/setuptools-*.dist-info' >/dev/null; then

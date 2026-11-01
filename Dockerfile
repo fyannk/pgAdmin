@@ -214,7 +214,17 @@ COPY LICENSE /pgadmin4/LICENSE
 
 # shadow is kept for the entrypoint's root-only usermod, but none of the
 # setuid helpers it and linux-pam install are needed at runtime.
-RUN find / -type d -name '__pycache__' -prune -exec rm -rf {} + && \
+#
+# The base image's own pip goes too. The venv was built without one, and
+# nothing in pgAdmin, its dependencies or the entrypoint invokes pip, but the
+# venv sees system site-packages, so the base's copy stayed importable and
+# shipped its own vendored setuptools, msgpack and urllib3, older than the
+# venv's. ensurepip's bundled wheel is the same pip again.
+RUN rm -rf /usr/local/lib/python3*/site-packages/pip \
+    /usr/local/lib/python3*/site-packages/pip-*.dist-info \
+    /usr/local/lib/python3*/ensurepip/_bundled \
+    /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.* && \
+  find / -type d -name '__pycache__' -prune -exec rm -rf {} + && \
   find / -xdev -type f -perm /6000 -exec chmod a-s {} + && \
   useradd -r -u 5050 -g root -s /sbin/nologin pgadmin && \
   mkdir -p /run/pgadmin /var/lib/pgadmin && \
