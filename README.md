@@ -1,191 +1,96 @@
-# pgadmin
+<p align="center">
+  <img src="site/assets/mark.svg" width="140" alt="fyannk/pgadmin logo: an elephant peeking over an application window bearing an ermine">
+</p>
 
-![Variants](https://img.shields.io/badge/variants-upstream%20%2B%20hardened-1f6feb?style=for-the-badge)
-![OpenShift friendly](https://img.shields.io/badge/OpenShift-restricted--friendly-ee0000?style=for-the-badge)
-![Source rebuilt](https://img.shields.io/badge/pgAdmin-source%20rebuilt-0a7f5a?style=for-the-badge)
+<h1 align="center">pgadmin</h1>
 
-> Two OpenShift-friendly pgAdmin variants: upstream-compatible and hardened.
+<p align="center">
+  <strong>pgAdmin 4 for restricted OpenShift and Kubernetes, with no privileged component left in the image.</strong><br>
+  Rebuilt as soon as a fix lands, signed, and measured against the official image every night, in public.
+</p>
 
-## Image tags
+<p align="center">
+  <a href="https://fyannk.github.io/pgAdmin/"><img src="https://img.shields.io/badge/security_report-nightly-090c0a?style=flat-square&labelColor=1b231d" alt="Nightly security report"></a>
+  <a href="https://github.com/fyannk/pgAdmin/actions/workflows/ci.yml"><img src="https://github.com/fyannk/pgAdmin/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+  <a href="docs/tags.md#verifying-an-image"><img src="https://img.shields.io/badge/signed-cosign-090c0a?style=flat-square&labelColor=1b231d" alt="Signed with cosign"></a>
+  <a href="https://github.com/fyannk/pgAdmin/pkgs/container/pgadmin"><img src="https://img.shields.io/badge/ghcr.io-fyannk%2Fpgadmin-090c0a?style=flat-square&logo=github&logoColor=b3bf3a&labelColor=1b231d" alt="On GitHub Container Registry"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-090c0a?style=flat-square&labelColor=1b231d" alt="Apache-2.0 license"></a>
+  <a href="https://hub.docker.com/r/fyannk/pgadmin"><img src="https://img.shields.io/badge/docker_hub-fyannk%2Fpgadmin-090c0a?style=flat-square&logo=docker&logoColor=b3bf3a&labelColor=1b231d" alt="On Docker Hub"></a>
+</p>
 
-| Tag | Variant | Use when |
-| --- | --- | --- |
-| `<version>` | Upstream-compatible no-cap | Immutable release image. It is published once when the matching official `dpage/pgadmin4` release first appears, with only its privileged Python capability removed. |
-| `<version>-hardened` | Source-rebuilt hardened image | Mutable rebuild of that pgAdmin release with refreshed OS and Python dependencies. |
-| `latest` | Source-rebuilt hardened image | Mutable rebuild of the newest supported pgAdmin release. This tag always points to the hardened variant. |
+The same pgAdmin release as the official image, without the capability a
+restricted platform refuses, so it runs as an unprivileged user or under
+whatever UID OpenShift assigns. The hardened variant goes further: rebuilt
+from pgAdmin's source with no setuid binary, no `sudo` and no mail server,
+and rebuilt again whenever Alpine or Python ship a fix. Every night both are
+scanned next to the official image; the [report](https://fyannk.github.io/pgAdmin/) shows the
+result, including whatever is still left.
 
-Both variants remove privileged-port support and therefore default to port
-`8080` or `8443` when `PGADMIN_LISTEN_PORT` is not set. Expose them through a
-Service or Route rather than restoring a file capability.
+> [!IMPORTANT]
+> This does not make pgAdmin itself any safer, and it cannot fix a
+> vulnerability before Alpine, Python or the pgAdmin project do. "No known,
+> fixable vulnerabilities" means none that the scanners know about and that
+> have a fix that can be applied today; the report shows the rest, and how
+> current the scanners' data is. The hardened variant also leaves out
+> password-reset email, which needs the bundled mail server.
 
-## What is different
+> [!NOTE]
+> An independent, personal project. It is not affiliated with, endorsed by or
+> sponsored by the pgAdmin project, the PostgreSQL project, Docker, or any
+> company.
 
-| Area | `<version>` upstream-compatible | `<version>-hardened` |
-| --- | --- | --- |
-| Application | Official prebuilt `dpage/pgadmin4:<version>` | Exact `REL-x_y` pgAdmin source release rebuilt in CI |
-| Image delta | Removes only the dedicated `python3-cap` binary that grants `CAP_NET_BIND_SERVICE` | Replaces the base image, rebuilds the application, and removes privileged components |
-| OS packages | Retains the upstream package snapshot | Fresh base images (`--pull`) plus `apk upgrade --no-cache` |
-| Python dependencies | Retains upstream dependency versions | Re-resolved during each build; fixed-package floors cover Pillow, httplib2, pyasn1, setuptools, Authlib, certifi, and urllib3, with vulnerable exact pins lifted to upstream master's release |
-| File capabilities | No capability-bearing Python binary | No capability-bearing Python binary or `libcap` package |
-| Mail service | Retains upstream Postfix and password-reset email behavior | Postfix and `sudo` omitted; password-reset email is disabled |
-| Build-only tools | Same as upstream | Excluded from the final runtime image |
+## Why use it?
 
-The hardened rebuild keeps pgAdmin's PostgreSQL 14–18 client utilities and
-supported runtime integrations. `libcurl` remains because PostgreSQL's OAuth
-client library requires it; it is installed from the freshly upgraded Alpine
-package repository rather than inherited from the upstream image.
+- **Restricted-ready**: no Linux capability and no root step, so it runs under OpenShift's `restricted` profile.
+- **Patched sooner**: the hardened variant is rebuilt when a fix lands, and at least once a week.
+- **Two choices**: `latest` for the hardened rebuild, `<version>` for the official image with only its capability removed.
+- **Proven, not promised**: a public, nightly comparison with the official image.
+- **Signed**: each image is signed as it is published, and comes with the list of what is inside it.
 
-## Hardened image security model
+## Quick start
 
-- Runs as non-root UID `5050` by default and remains compatible with an
-  OpenShift arbitrary UID using GID `0`.
-- Does not ship `CAP_NET_BIND_SERVICE`, a privileged Python copy, `libcap`,
-  `postfix`, `sudo`, or the postfix sudoers rule.
-- Ships no setuid or setgid binaries.
-- Uses an explicit `PGADMIN_DISABLE_POSTFIX=1` default and removes the postfix
-  startup block entirely, so clearing that variable cannot invoke a missing
-  privileged component.
-- Builds Python dependencies with `pip --upgrade`, package-security floors,
-  and `pip check` before copying the virtual environment into the runtime.
-- Publishes SPDX SBOM and SLSA provenance attestations with every image.
-
-The hardened image intentionally keeps pgAdmin's upstream arbitrary-UID
-mechanism: `/etc/passwd` is group-writable by GID `0` so a random OpenShift UID
-can add its own identity entry. This is required for the supported restricted
-OpenShift execution model. Use a read-only root filesystem only with an
-NSS-compatible identity strategy or a platform that already provides a passwd
-entry.
-
-Every pull request rebuilds the hardened image and asserts these properties
-against the result, so a change that reintroduces a privileged component or
-leaves build-only tooling in the runtime fails before it merges. The scan gate
-blocks on critical findings with an applicable fix that the change introduces;
-one already in the published image is tracked by a nightly-updated issue, and
-everything else is published to the repository's code scanning results rather
-than ignored.
-
-No image can promise a permanent zero-CVE result. A finding with no vendor fix
-cannot be removed safely without replacing the affected component or feature.
-The hardened variant removes stale, fixable inherited packages at rebuild time
-and records the resulting SBOM so audits can distinguish current fixed findings
-from unfixed upstream issues.
-
-## Local builds
-
-Build the upstream-compatible variant from this repository:
-
-```text
-docker build --pull -f Dockerfile.upstream -t fyannk/pgadmin:9.17 .
+```sh
+docker run -d --name pgadmin -p 8080:8080 \
+  -e PGADMIN_DEFAULT_EMAIL=admin@example.com \
+  -e PGADMIN_DEFAULT_PASSWORD=change-me \
+  ghcr.io/fyannk/pgadmin:latest
 ```
 
-The hardened Docker build context **must be the matching pgAdmin source
-checkout**, not this repository. With the sibling checkout supplied for
-development:
+It listens on `8080` rather than `80`, since binding a privileged port is
+exactly what it gives up. Everything else documented for the
+[official image](https://www.pgadmin.org/docs/pgadmin4/latest/container_deployment.html)
+works the same way. The images are also on Docker Hub as `fyannk/pgadmin`.
 
-```text
-git -C ../pgadmin4 checkout REL-9_17
-docker build --pull -f Dockerfile -t fyannk/pgadmin:9.17-hardened ../pgadmin4
-```
+## Project status
 
-The `--pull` flag is important for the hardened image: it refreshes the Python,
-Alpine, and PostgreSQL builder images before the final image runs `apk upgrade`
-and rebuilds Python packages.
+Maintained. The newest pgAdmin release is published, for `linux/amd64`.
 
-To inspect only vulnerabilities that have a published fix, use:
+## Documentation
 
-```text
-grype fyannk/pgadmin:9.17-hardened --only-fixed
-```
+- [Security report](https://fyannk.github.io/pgAdmin/): the nightly comparison, variant by variant.
+- [What changes](docs/what-changes.md) compared with the official image, and how to run it.
+- [Tags and registries](docs/tags.md), and how to verify a signature.
+- [How images are checked](docs/verification.md) before they ship, and how they are measured.
+- [Maintaining](docs/maintaining.md): local builds and the publishing pipeline.
 
-Run an unrestricted scan as well when policy requires it; findings without a
-fixed version need a documented risk decision rather than an image-layer
-cleanup. The scheduled build refreshes the selected Python and Alpine bases, so
-run the scan against the tag intended for deployment rather than relying on a
-previous report.
+## Contributing
 
-## Runtime requirements
+Contributions are welcome. Read
+[CONTRIBUTING.md](https://github.com/fyannk/.github/blob/main/CONTRIBUTING.md)
+first. For larger changes, open an issue before writing code.
 
-The first launch needs the standard pgAdmin bootstrap variables:
+## Security
 
-```text
-PGADMIN_DEFAULT_EMAIL=admin@example.com
-PGADMIN_DEFAULT_PASSWORD=<secret>
-```
+Report vulnerabilities privately, as described in [SECURITY.md](SECURITY.md).
 
-The service listens on port `8080` by default. Set `PGADMIN_LISTEN_PORT` if a
-different unprivileged port is required. A Service or Route should provide
-external port mapping; do not add a file capability merely to bind port 80 or
-443 inside the container.
+## License
 
-Use `PGADMIN_DEFAULT_PASSWORD_FILE` instead of a plaintext environment variable
-where the orchestrator can mount a secret file.
+Apache-2.0. See [LICENSE](LICENSE). The images contain pgAdmin, under the
+PostgreSQL Licence, and the official image's own files; see [NOTICE](NOTICE).
 
-## Merge automation
+---
 
-The ruleset on `main` requires the four jobs
-[`ci.yml`](.github/workflows/ci.yml) runs on a pull request — lint, build,
-container profiles, and the vulnerability scan — plus the CodeQL analysis of
-the workflows, and requires that review threads be resolved. It requires no
-approvals: the gate is the pipeline and the reading, not a rubber stamp.
-Copilot is requested on every pull request automatically; its review is always
-a comment, never an approval, so it cannot approve a change, but an unresolved
-thread it opens does hold the merge until someone answers it.
-
-Branches need not be up to date with `main` to merge. Requiring that would
-catch the case where two pull requests pass alone and break together, but
-nothing rebases a stale branch on its own: auto-merge only waits and merges,
-and Dependabot refreshes a branch when its manifest conflicts, not when `main`
-moves. The requirement would trade a rare class of conflict for a queue that
-stalls on every merge. `ci.yml` runs on pushes to `main` as well, so a
-conflict that slips through surfaces there within minutes.
-
-Dependabot's patch and minor bumps, grouped weekly by
-[`dependabot.yml`](.github/dependabot.yml), queue themselves through
-[`automerge.yml`](.github/workflows/automerge.yml) and land the moment the
-required checks go green. Anything else, a major among them, is left for a
-person: the workflow arms auto-merge from an allowlist, so an update type it
-has not seen stops rather than merges.
-
-What Dependabot watches is the hardened recipe's bases — Alpine, Python, and
-the PostgreSQL client builders — plus the actions every workflow pins. The
-upstream-compatible image is deliberately outside that: it mirrors an official
-pgAdmin release, and which release it tracks is resolved by the publish
-workflow rather than bumped in a pull request. The `dpage/pgadmin4` base is
-ignored for that reason.
-
-## Release automation
-
-Images are published to GHCR only.
-
-The scheduled workflow resolves the latest stable `dpage/pgadmin4` version. It
-checks GHCR for the corresponding upstream-compatible tag and builds that image
-only if the tag does not exist. It then checks out the exact
-`pgadmin-org/pgadmin4` `REL-x_y` source tag and rebuilds the hardened image,
-updating both `<version>-hardened` and `latest`. Every build attaches SBOM and
-provenance attestations.
-
-The hardened image is rebuilt only when an input that can change its contents
-has moved: the pgAdmin source revision, this repository's revision, or any base
-image digest. That fingerprint is recorded on the image as the
-`io.fyannk.pgadmin.inputs` label and compared against the published `latest`. A
-rebuild happens regardless once the published image is more than seven days old,
-so a dependency patch with unchanged base images is still picked up.
-
-After each publish the workflow prunes only untagged GHCR manifests that no
-tagged index references, such as old manifests left behind when `latest` moves.
-Tagged release versions are retained; the cleanup does not delete tagged images.
-The workflow intentionally creates no daily date tags, preventing unbounded
-tagged-image growth.
-
-Published images:
-
-- `ghcr.io/fyannk/pgadmin:<version>`
-- `ghcr.io/fyannk/pgadmin:<version>-hardened`
-- `ghcr.io/fyannk/pgadmin:latest` (hardened)
-
-## Scope
-
-Neither variant forks the pgAdmin application. The upstream-compatible image
-only removes privileged-port binding support. The hardened image additionally
-removes the in-container Postfix password-reset delivery path and rebuilds the
-runtime from the upstream pgAdmin source.
+<sub>PostgreSQL® and the Slonik logo are trademarks or registered trademarks of
+the PostgreSQL Community Association of Canada. This project is not affiliated
+with or endorsed by the Association, nor with the
+[pgAdmin project](https://www.pgadmin.org/), whose release it packages.</sub>

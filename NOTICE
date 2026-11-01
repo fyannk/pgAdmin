@@ -1,0 +1,49 @@
+fyannk/pgadmin
+Copyright 2026 Fanch KERGUELEN
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Third-party material
+--------------------
+
+The container images published by this project contain pgAdmin 4
+(https://github.com/pgadmin-org/pgadmin4), which is not copied into this
+repository. The hardened variant is built from pgAdmin's release source, with
+its container entrypoint's postfix startup block removed by the Dockerfile.
+The upstream-compatible variant is the official dpage/pgadmin4 image with its
+python3-cap binary removed. pgAdmin is distributed under the following
+licence:
+
+    Copyright (C) 2013 - 2026, The pgAdmin Development Team
+
+    Permission to use, copy, modify, and distribute this software and its
+    documentation for any purpose, without fee, and without a written agreement is
+    hereby granted, provided that the above copyright notice and this paragraph and
+    the following two paragraphs appear in all copies.
+
+    IN NO EVENT SHALL THE PGADMIN DEVELOPMENT TEAM BE LIABLE TO ANY PARTY FOR
+    DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES, INCLUDING LOST
+    PROFITS, ARISING OUT OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF
+    THE PGADMIN DEVELOPMENT TEAM HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+    THE PGADMIN DEVELOPMENT TEAM SPECIFICALLY DISCLAIMS ANY WARRANTIES, INCLUDING,
+    BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+    PARTICULAR PURPOSE. THE SOFTWARE PROVIDED HEREUNDER IS ON AN "AS IS" BASIS, AND
+    THE PGADMIN DEVELOPMENT TEAM HAS NO OBLIGATIONS TO PROVIDE MAINTENANCE, SUPPORT,
+    UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
+
+The fonts in site/fonts are IBM Plex, licensed under the SIL Open Font
+License 1.1 (see site/fonts/OFL.txt).
+
+Python, Alpine Linux, the PostgreSQL client utilities and the other packages
+in the images are distributed under their own licenses, as in the official
+image.
+
+Trademarks
+----------
+
+PostgreSQL® and the Slonik logo are trademarks or registered trademarks of
+the PostgreSQL Community Association of Canada. This project is not
+affiliated with or endorsed by the Association, nor with the pgAdmin
+Development Team. The Apache License does not grant permission to use the
+trade names, trademarks or logos of this project or of others (section 6).
