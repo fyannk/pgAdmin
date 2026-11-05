@@ -132,8 +132,8 @@ scan() {
 
 # One entry per variant, with the tags that point to it.
 variants="$(jq -cn --arg v "${version}" '[
-  {name: "hardened", label: "Hardened", tag: "\($v)-hardened", tags: ["\($v)-hardened", "latest"]},
-  {name: "upstream", label: "Upstream-compatible", tag: $v, tags: [$v]}
+  {name: "hardened", label: "fyannk - hardened", tag: "\($v)-hardened", tags: ["\($v)-hardened", "latest"]},
+  {name: "upstream", label: "fyannk - compatible", tag: $v, tags: [$v]}
 ]')"
 
 official="${UPSTREAM_REPO:-docker.io/dpage/pgadmin4}:${version}"
@@ -184,8 +184,10 @@ jq -s --arg generated "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg version "${version}
 " "${out}"/data/images/*.json > "${out}/data/latest.json"
 
 # History keeps one row per day with each image's counts, per side and
-# scanner; nothing is summed across images. Today's row replaces an earlier
-# run of the same day.
+# scanner, and the pgAdmin release scanned; nothing is summed across images.
+# Today's row replaces an earlier run of the same day. Rows from before the
+# release was recorded get it from the date: 2026-11-05 was the first scan of
+# 9.19.
 # Only a 404 (the first deployment) starts it afresh: any other failure stops
 # the run, since publishing would overwrite the accumulated history.
 # The history stays in a file: a year of it is larger than a single command
@@ -216,8 +218,11 @@ fi
 jq --slurpfile history "${history}" '
   def counts: if .scans then .scans | map_values({total, fixable}) else null end;
   (.generated[0:10]) as $date
-  | ($history[0] | map(select(.date != $date)))
+  | ($history[0]
+      | map(select(.date != $date))
+      | map(if .version then . else .version = (if .date < "2026-11-05" then "9.18" else "9.19" end) end))
     + [{date: $date,
+        version: .version,
         images: (.images | map({key: .name, value: {ours: (.ours | counts), upstream: (.upstream | counts)}})
           | from_entries)}]
   | sort_by(.date) | .[-400:]
