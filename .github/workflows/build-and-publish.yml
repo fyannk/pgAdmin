@@ -390,6 +390,55 @@ jobs:
           OWNER: ${{ github.repository_owner }}
         run: .github/scripts/prune-dockerhub.sh "${OWNER}/${IMAGE_NAME}" "${GRACE_DAYS}"
 
+  # A failed publish leaves users on the previous image, and a new pgAdmin
+  # release can break the build with no pull request to show it. Tracked as
+  # the image watch tracks a finding: a single issue that opens on the first
+  # failure, is updated in place while it lasts, and closes once the newest
+  # release publishes. A manual run for an older version says nothing about
+  # that, so only the newest release counts.
+  track:
+    name: Track publish failures
+    needs: [detect, publish]
+    if: >-
+      always() &&
+      needs.detect.result != 'cancelled' &&
+      needs.publish.result != 'cancelled' &&
+      (needs.detect.result == 'failure' || needs.detect.outputs.version == needs.detect.outputs.newest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Open, update or close the tracking issue
+        env:
+          DETECT_RESULT: ${{ needs.detect.result }}
+          PUBLISH_RESULT: ${{ needs.publish.result }}
+          VERSION: ${{ needs.detect.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="Publishing the images is failing"
+
+          number="$(gh issue list --state open --search "in:title \"${title}\"" \
+            --json number,title --jq ".[] | select(.title == \"${title}\") | .number" | head -n 1)"
+
+          if [[ "${DETECT_RESULT}" == "success" && "${PUBLISH_RESULT}" == "success" ]]; then
+            if [[ -n "${number}" ]]; then
+              gh issue close "${number}" --comment "Cleared: [this run](${RUN_URL}) published pgAdmin ${VERSION}."
+            fi
+            exit 0
+          fi
+
+          body="[The latest failed run](${RUN_URL}) was building pgAdmin ${VERSION:-<unresolved>}. A variant that failed keeps serving its previous image, so its fixes are not reaching users. This issue closes itself once a run of the newest release succeeds."
+
+          if [[ -n "${number}" ]]; then
+            gh issue edit "${number}" --body "${body}"
+          else
+            gh issue create --title "${title}" --body "${body}"
+          fi
+
   # Prune untagged GHCR manifests that no tagged index references, once they
   # have been untagged for a week: an image replaced by a newer push stays
   # pullable by digest long enough for anyone pinning it to move on. Do not
