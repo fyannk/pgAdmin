@@ -439,6 +439,23 @@ jobs:
             gh issue create --title "${title}" --body "${body}"
           fi
 
+  # The nightly publish is followed by the nightly report. A manual one is
+  # not, so the page would describe the replaced image until the next night.
+  report:
+    name: Refresh the security report
+    needs: publish
+    if: github.event_name == 'workflow_dispatch' && needs.publish.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write # dispatch the report workflow
+    steps:
+      - name: Dispatch the report
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh workflow run security-report.yml --ref main
+
   # Prune untagged GHCR manifests that no tagged index references, once they
   # have been untagged for a week: an image replaced by a newer push stays
   # pullable by digest long enough for anyone pinning it to move on. Do not

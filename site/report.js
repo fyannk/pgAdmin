@@ -11,10 +11,6 @@ const LEVELS = [
   { key: "low", label: "Low" },
   { key: "other", label: "Other", short: "Oth", from: ["negligible", "unknown"] },
 ];
-const SIDES = [
-  { key: "ours", label: "fyannk" },
-  { key: "upstream", label: "official" },
-];
 const SCANNERS = [
   { key: "grype", label: "grype" },
   { key: "trivy", label: "Trivy" },
@@ -174,22 +170,29 @@ function renderStable() {
   }
   document.getElementById("stable-title").textContent = `Latest release: pgAdmin ${state.latest.version}`;
   const scanner = SCANNERS.find((s) => s.key === state.scanner);
-  container.replaceChildren(...images.map((image) => imageCard(image, image.label, [scanner])));
+  container.replaceChildren(comparisonCard(images, [scanner]));
 }
 
-// One card per image: its sides, each scanned by the given scanners. With a
-// single scanner the side names its row; with several, the side heads a
-// group of scanner rows. Cards size themselves, so they tile on wide screens
-// and stack on narrow ones.
-function imageCard(image, title, scanners) {
+// Each variant of ours, then the official image. It is scanned once and is
+// what either variant replaces, so it is listed once.
+function comparisonSides(images) {
+  const sides = images.map((image) => ({ key: "ours", label: image.label, info: image.ours }));
+  if (images[0]) sides.push({ key: "upstream", label: "official", info: images[0].upstream });
+  return sides;
+}
+
+// One table of every image, each scanned by the given scanners. With a single
+// scanner the image names its row; with several, it heads a group of scanner
+// rows.
+function comparisonCard(images, scanners) {
   const single = scanners.length === 1;
   const columns = 1 + LEVELS.length + 1;
   const head = el("thead", {}, el("tr", {},
     el("th", { scope: "col", text: single ? "Image" : "Scanner" }),
     ...severityHeads(),
   ));
-  const bodies = SIDES.map((side) => {
-    const info = image[side.key];
+  const bodies = comparisonSides(images).map((side) => {
+    const { info } = side;
     const body = el("tbody");
     if (!single) body.append(el("tr", { class: "side" }, el("th", { scope: "rowgroup", colspan: String(columns) }, sourceLabel(side))));
     if (!info?.scans) {
@@ -206,15 +209,16 @@ function imageCard(image, title, scanners) {
     }
     return body;
   });
+  const caption = `pgAdmin ${state.latest.version}, ${scanners.map((s) => s.label).join(" and ")}`;
   return el("article", { class: "card image-card" },
-    el("h3", { text: title }),
-    el("div", { class: "table-wrap" }, el("table", { class: "severity-table" }, head, ...bodies)));
+    el("div", { class: "table-wrap" }, el("table", { class: "severity-table" },
+      el("caption", { class: "vh", text: caption }), head, ...bodies)));
 }
 
 // --- Trend chart --------------------------------------------------------------------
 
 // One line per variant, and one for the official image they both replace.
-// The variants are both ours, so the upstream-compatible one is drawn dashed.
+// The variants are both ours, so the compatible one is drawn dashed.
 function chartSeries() {
   const series = orderedImages().map((image) => ({
     id: `ours-${image.name}`, side: "ours", alt: image.name !== "hardened", name: image.name, label: image.label,
@@ -237,10 +241,12 @@ function renderHistoryTable(series, points, metric) {
     el("caption", { text: `${metric}, ${SCANNERS.find((s) => s.key === state.scanner).label}` }),
     el("thead", {}, el("tr", {},
       el("th", { scope: "col", text: "Date" }),
+      el("th", { scope: "col", text: "pgAdmin" }),
       ...series.map((s) => el("th", { scope: "col", class: "num", text: s.label })),
     )),
     el("tbody", {}, [...points].reverse().map((p) => el("tr", {},
       el("td", { text: shortDate(p.date) }),
+      el("td", { text: p.version ?? "–" }),
       ...series.map((s) => el("td", { class: "num", text: p.values[s.id] == null ? "–" : fmt.format(p.values[s.id]) })),
     ))),
   );
@@ -275,6 +281,7 @@ function renderChart() {
   const points = state.history
     .map((h) => ({
       date: h.date,
+      version: h.version,
       values: Object.fromEntries(series.map((s) => [s.id, h.images?.[s.name]?.[s.side]?.[state.scanner]?.[metricKey] ?? null])),
     }))
     .filter((p) => Object.values(p.values).some((v) => v != null));
@@ -292,7 +299,7 @@ function renderChart() {
   const height = Math.round(Math.min(440, Math.max(260, width * 0.3)));
   // Narrow charts drop the end labels for room; the legend names the lines.
   const endLabels = width >= 560;
-  const m = { top: 16, right: endLabels ? 150 : 12, bottom: 28, left: 44 };
+  const m = { top: 20, right: endLabels ? 185 : 12, bottom: 28, left: 44 };
   const plotW = width - m.left - m.right;
   const plotH = height - m.top - m.bottom;
   const values = points.flatMap((p) => Object.values(p.values).filter((v) => v != null));
@@ -300,8 +307,15 @@ function renderChart() {
   const x = (i) => m.left + (i / (points.length - 1)) * plotW;
   const y = (v) => m.top + plotH - (v / yMax) * plotH;
 
+  // The report follows the newest release, so every line can jump where it
+  // moves to the next one. Marked at the first scan of that release: the
+  // night the numbers change, not the day upstream tagged it.
+  const releases = new Map(points.flatMap((p, i) =>
+    i > 0 && p.version !== points[i - 1].version ? [[i, p.version]] : []));
+  const releaseNote = [...releases.values()].map((v) => ` pgAdmin ${v} starts where marked.`).join("");
+
   const root = svg("svg", { viewBox: `0 0 ${width} ${height}`, role: "img", tabindex: "0",
-    "aria-label": `${metric} over ${points.length} scans, ${series.map((s) => s.label).join(", ")}. Use the arrow keys to read each scan.` });
+    "aria-label": `${metric} over ${points.length} scans, ${series.map((s) => s.label).join(", ")}.${releaseNote} Use the arrow keys to read each scan.` });
 
   for (let i = 0; i <= 4; i++) {
     const v = (yMax / 4) * i;
@@ -314,6 +328,15 @@ function renderChart() {
   for (const i of ticks) {
     const label = svg("text", { class: "tick", x: x(i), y: height - 8, "text-anchor": i === 0 ? "start" : i === points.length - 1 ? "end" : "middle" });
     label.textContent = shortDate(points[i].date);
+    root.append(label);
+  }
+
+  for (const [i, version] of releases) {
+    root.append(svg("line", { class: "release", x1: x(i), x2: x(i), y1: m.top, y2: m.top + plotH }));
+    const text = `pgAdmin ${version}`;
+    const anchor = x(i) + 45 > width ? "end" : "middle";
+    const label = svg("text", { class: "release-label", x: x(i), y: m.top - 6, "text-anchor": anchor });
+    label.textContent = text;
     root.append(label);
   }
 
@@ -372,6 +395,7 @@ function renderChart() {
       el("div", { class: "date", text: shortDate(p.date) }),
       ...series.map((s) => el("div", { class: "row" }, lineKey(s),
         el("strong", { text: p.values[s.id] == null ? "–" : fmt.format(p.values[s.id]) }), s.label)),
+      releases.has(i) ? el("div", { class: "release-note", text: `First scan of pgAdmin ${releases.get(i)}` }) : null,
     );
     tooltip.hidden = false;
     const scale = container.clientWidth / width;
@@ -409,8 +433,7 @@ function renderChart() {
 // --- Every image ----------------------------------------------------------------------
 
 function renderAll() {
-  document.getElementById("all").replaceChildren(...orderedImages()
-    .map((image) => imageCard(image, `${image.label} · ${image.version}`, SCANNERS)));
+  document.getElementById("all").replaceChildren(comparisonCard(orderedImages(), SCANNERS));
 }
 
 // --- Tags ---------------------------------------------------------------------------

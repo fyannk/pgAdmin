@@ -205,6 +205,8 @@ figcaption p { margin: 0.2rem 0 0; }
 .chart .dot.ours { fill: var(--ours); }
 .chart .dot.upstream { fill: var(--upstream); }
 .chart .crosshair { stroke: var(--axis); stroke-width: 1; }
+.chart .release { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; }
+.chart .release-label { fill: var(--text-2); font-family: var(--mono); font-size: 12px; font-weight: 500; }
 .chart .empty { color: var(--text-2); font-size: 0.95rem; padding: 3rem 0; text-align: center; margin: 0; }
 .tooltip {
   position: absolute;
@@ -220,6 +222,7 @@ figcaption p { margin: 0.2rem 0 0; }
 .tooltip[hidden] { display: none; }
 .tooltip .date { color: var(--text-2); margin-bottom: 0.25rem; }
 .tooltip .row { display: flex; align-items: center; gap: 0.5rem; }
+.tooltip .release-note { color: var(--text-2); margin-top: 0.25rem; }
 .tooltip strong { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .table-view { margin-top: 0.75rem; }
 .table-view summary { cursor: pointer; color: var(--text-2); font-size: 0.9rem; }
@@ -307,7 +310,7 @@ td.wrap { white-space: normal; }
 .squares-key { margin: var(--fy-space-2) 0 var(--fy-space-6); line-height: 1.9; }
 .squares-key .sq { min-width: 0; padding: 0 var(--fy-space-1); }
 
-/* Image cards: as many columns as fit, each table sized by its card. */
+/* The comparison table, sized by its card. */
 .image-cards {
   display: grid;
   grid-template-columns: 1fr;
@@ -316,7 +319,8 @@ td.wrap { white-space: normal; }
 .image-card { margin: 0; padding: var(--fy-space-4); container-type: inline-size; }
 .image-card h3 { margin-bottom: var(--fy-space-2); }
 .severity-table { table-layout: fixed; }
-.severity-table thead th:first-child { width: 7.5rem; }
+.severity-table thead th:first-child { width: 12rem; }
+.severity-table .source { white-space: normal; }
 .severity-table th.all { width: 5rem; }
 .severity-table th, .severity-table td { padding: 4px var(--fy-space-1); }
 .severity-table th.sev, .severity-table td.sev { text-align: center; }
@@ -328,12 +332,12 @@ td.wrap { white-space: normal; }
   .severity-table .long { display: none; }
   .severity-table .short { display: inline; }
   .severity-table .all { display: none; }
-  .severity-table thead th:first-child { width: 5.5rem; }
+  .severity-table thead th:first-child { width: 6.5rem; }
   .severity-table { font-size: var(--fy-text-xs); }
 }
 /* Phone width: the squares get every pixel left, up to "126/999". */
 @container (max-width: 24rem) {
-  .severity-table thead th:first-child { width: 3.9rem; }
+  .severity-table thead th:first-child { width: 4.8rem; }
   .severity-table th, .severity-table td { padding: 3px 1px; }
   .severity-table tbody .key-dot { display: none; }
   .severity-table td.sev .sq { padding-inline: 0; font-size: 11px; letter-spacing: -0.02em; }
