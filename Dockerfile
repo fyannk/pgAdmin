@@ -103,7 +103,12 @@ FROM python-builder AS docs-builder
 COPY docs /pgadmin4/docs
 COPY web /pgadmin4/web
 
-RUN /venv/bin/python3 -m pip install --no-cache-dir --upgrade \
+# Since 9.19 the docs build imports psycopg, through config.py, and psycopg's C
+# extension needs libpq.so.5. The copy postgresql-dev pulled in went with
+# .build-deps. It is only needed here: the runtime image gets its libpq from
+# pg18-builder.
+RUN apk add --no-cache libpq && \
+  /venv/bin/python3 -m pip install --no-cache-dir --upgrade \
     sphinx \
     sphinxcontrib-youtube && \
   rm -rf /pgadmin4/docs/en_US/_build && \
