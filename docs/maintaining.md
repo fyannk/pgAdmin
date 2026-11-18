@@ -84,8 +84,10 @@ pullable by digest, for seven days. After that the cleanup that runs after each
 publish deletes it: on GHCR through
 [ghcr-cleanup-action](https://github.com/dataaxiom/ghcr-cleanup-action),
 together with signatures left without an image, on Docker Hub through
-[`prune-dockerhub.sh`](../.github/scripts/prune-dockerhub.sh). Tagged images are
-never deleted, and no daily date tags are created. Docker Hub's manifest API is
+[`prune-dockerhub.sh`](../.github/scripts/prune-dockerhub.sh). The mirror also
+removes from Docker Hub the signature tags GHCR no longer has, so those
+signatures follow a week later. Release tags are never deleted, and no daily
+date tags are created. Docker Hub's manifest API is
 not part of Docker's published reference, so a failed Hub cleanup is reported
 as a warning rather than failing the publish.
 
