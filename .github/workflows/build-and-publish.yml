@@ -377,6 +377,8 @@ jobs:
         env:
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
           OWNER: ${{ github.repository_owner }}
         run: .github/scripts/sync-dockerhub.sh "ghcr.io/${OWNER}/${IMAGE_NAME}" "${OWNER}/${IMAGE_NAME}"
 

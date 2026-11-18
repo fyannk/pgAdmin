@@ -15,6 +15,8 @@
 #   A manifest another one still references is refused ("blocked"), but a
 #   tagged one is deleted without complaint. Only untagged digests are ever
 #   sent from here, and tags are re-read right before each deletion.
+# - That DELETE answers 500 to 50 digests at once and deletes none of them,
+#   while 13 are fine (observed on 2026-11-18), so digests go 10 at a time.
 #
 # Deletion runs in two passes: untagged indexes first, which releases the
 # platform and attestation manifests they reference, then untagged manifests
@@ -53,10 +55,19 @@ prune() {
     select((.tags | length) == 0 and .last_pushed < \$cutoff and (.media_type | ${kind}))
     | .manifest_digest")
   echo "${label}: ${#candidates[@]} untagged and older than ${days} days"
-  local i
-  for ((i = 0; i < ${#candidates[@]}; i += 50)); do
-    response="$(jq -n '{digests: $ARGS.positional}' --args "${candidates[@]:i:50}" \
-      | curl -fsS -X DELETE "${auth[@]}" -H 'Content-Type: application/json' --data @- "${api}")"
+  local i code batch
+  for ((i = 0; i < ${#candidates[@]}; i += 10)); do
+    batch=("${candidates[@]:i:10}")
+    # Without -f, so Hub's answer to a refused batch is shown and the next
+    # batch still goes.
+    response="$(jq -n '{digests: $ARGS.positional}' --args "${batch[@]}" \
+      | curl -sS -w '\n%{http_code}' -X DELETE "${auth[@]}" -H 'Content-Type: application/json' --data @- "${api}")"
+    code="${response##*$'\n'}"
+    response="${response%$'\n'*}"
+    if [[ "${code}" != 2* ]]; then
+      echo "::warning::Docker Hub answered ${code} to deleting ${#batch[@]} manifest(s) in ${repository}: ${response:0:500}"
+      continue
+    fi
     jq -r '.status | to_entries[] | "  \(.key) \(.value.status.status)\(if .value.status.message then ": " + .value.status.message else "" end)"' <<<"${response}"
     if jq -e '.status | to_entries | any(.value.status.status != "success" and .value.status.status != "blocked")' <<<"${response}" >/dev/null; then
       echo "::warning::Some Docker Hub deletions in ${repository} failed; see the log above"

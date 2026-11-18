@@ -19,6 +19,11 @@
 # come from the Hub API, an unchanged tag costs nothing, and a copy that is
 # throttled waits and retries. A listing that fails stops the run rather than
 # being mistaken for missing tags and copied again.
+#
+# A signature tag (sha256-<digest>) that the GHCR cleanup deleted with its
+# image is removed from Docker Hub too, through the Hub API with
+# DOCKERHUB_USERNAME and DOCKERHUB_TOKEN; Hub's own cleanup then deletes the
+# untagged signature a week later. No other tag is ever removed.
 set -euo pipefail
 
 source="${1:?usage: $0 <source-repo> <namespace>/<repository>}"
@@ -90,11 +95,24 @@ for tag in "${tags[@]}"; do
   fi
 done
 
+# Signature tags still on Docker Hub whose image the GHCR cleanup deleted.
+declare -A listed=()
+for tag in "${tags[@]}"; do
+  listed["${tag}"]=1
+done
+stale=()
+for tag in "${!hub[@]}"; do
+  [[ "${tag}" =~ ^sha256-[0-9a-f]{64}$ && -z "${listed[${tag}]:-}" ]] && stale+=("${tag}")
+done
+
 if [[ "${DRY_RUN:-}" == "true" ]]; then
   for digest in "${!pending[@]}"; do
     echo "would copy ${digest} ->${pending[${digest}]}"
   done
-  echo "Dry run: ${#pending[@]} image(s) to mirror."
+  for tag in "${stale[@]}"; do
+    echo "would remove ${tag} from docker.io/${target}"
+  done
+  echo "Dry run: ${#pending[@]} image(s) to mirror, ${#stale[@]} signature tag(s) to remove."
   exit 0
 fi
 
@@ -136,4 +154,25 @@ for digest in "${!pending[@]}"; do
 done
 
 echo "Mirrored ${#pending[@]} image(s)."
+
+# A tag left behind costs only storage, so a failure here warns and the next
+# run tries again.
+if [[ "${#stale[@]}" -gt 0 ]]; then
+  if [[ -z "${DOCKERHUB_USERNAME:-}" || -z "${DOCKERHUB_TOKEN:-}" ]]; then
+    echo "::warning::${#stale[@]} stale signature tag(s) on docker.io/${target}, not removed without DOCKERHUB_USERNAME and DOCKERHUB_TOKEN"
+  elif ! hub_token="$(jq -n --arg id "${DOCKERHUB_USERNAME}" --arg secret "${DOCKERHUB_TOKEN}" '{identifier: $id, secret: $secret}' \
+    | curl -fsS -X POST https://hub.docker.com/v2/auth/token -H 'Content-Type: application/json' --data @- \
+    | jq -er '.access_token')"; then
+    echo "::warning::Docker Hub authentication failed; ${#stale[@]} stale signature tag(s) left on docker.io/${target}"
+  else
+    for tag in "${stale[@]}"; do
+      if curl -fsS -X DELETE -H "Authorization: Bearer ${hub_token}" "${tags_api}/${tag}"; then
+        echo "${tag}: removed, its image is gone from ${source}"
+      else
+        echo "::warning::Could not remove ${tag} from docker.io/${target}; the next run tries again"
+      fi
+    done
+  fi
+fi
+
 [[ "${failed}" -eq 0 && "${wrong}" -eq 0 ]]
