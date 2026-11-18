@@ -170,12 +170,13 @@ jobs:
         run: .github/scripts/check-image.sh pgadmin-ci:hardened hardened
 
   # The published images are amd64 only. This job measures whether the
-  # hardened recipe builds under QEMU (the Python wheel compilation is the
-  # expected bottleneck). It is informational until it is reliably green and
-  # fast enough; only then add linux/arm64 to the publish.
+  # hardened recipe builds for arm64, on a native arm64 runner: under QEMU,
+  # Node crashed now and then with an illegal instruction during yarn install,
+  # and that step alone took half an hour. It is informational until it is
+  # reliably green and fast enough; only then add linux/arm64 to the publish.
   build-arm64:
     name: Build hardened image (arm64, informational)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     continue-on-error: true
     timeout-minutes: 120
     steps:
@@ -191,10 +192,6 @@ jobs:
           git clone --depth 1 --branch "REL-${version/./_}" \
             https://github.com/pgadmin-org/pgadmin4.git pgadmin4
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
-
-      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
-        with:
-          platforms: arm64
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
         with:

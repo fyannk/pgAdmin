@@ -30,8 +30,8 @@ The hardened variant also:
 
 The workflows themselves are audited by actionlint and zizmor on every pull
 request, by CodeQL, and weekly by OpenSSF Scorecard. An informational job
-builds the hardened recipe for `linux/arm64` under QEMU, ahead of publishing
-that platform.
+builds the hardened recipe for `linux/arm64` on a native arm64 runner, ahead
+of publishing that platform.
 
 The hardened image is also scanned with grype. The gate blocks on critical
 findings with an applicable fix that the change introduces; one already in the
