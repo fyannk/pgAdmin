@@ -74,7 +74,15 @@ echo "${#tags[@]} tag(s) at ${source}, ${#hub[@]} on docker.io/${target}"
 # copied once with all of its tags.
 declare -A pending=()
 for tag in "${tags[@]}"; do
-  digest="$(docker buildx imagetools inspect "${source}:${tag}" --format '{{json .Manifest}}' | jq -er .digest)"
+  # A tag deleted since the listing is skipped; any other failure stops the run.
+  if ! digest="$(docker buildx imagetools inspect "${source}:${tag}" --format '{{json .Manifest}}' | jq -er .digest)"; then
+    if ! source_tags | grep -qxF "${tag}"; then
+      echo "${tag}: deleted from ${source} since the listing, skipped"
+      continue
+    fi
+    echo "::error::Could not read ${source}:${tag}" >&2
+    exit 1
+  fi
   if [[ "${hub[${tag}]:-}" == "${digest}" ]]; then
     echo "${tag}: up to date"
   else
