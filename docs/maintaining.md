@@ -67,8 +67,8 @@ still picked up. A manual run can pick an older release or force a rebuild;
 an older release never moves `latest`.
 
 GHCR is where images are built, checked and tagged. Docker Hub is a mirror:
-once the publish jobs are done, a single job copies to Docker Hub every tag
-whose digest differs there, attestations included
+once the publish jobs and the GHCR cleanup are done, a single job copies to
+Docker Hub every tag whose digest differs there, attestations included
 ([`sync-dockerhub.sh`](../.github/scripts/sync-dockerhub.sh)), so a tag resolves to
 the same digest on both. A Docker Hub account gets 200 registry requests an
 hour, so the mirror reads Hub's current tags from the Hub API, skips unchanged

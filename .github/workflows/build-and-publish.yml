@@ -336,10 +336,12 @@ jobs:
   # few sequential requests instead of every publish job at once (an account
   # gets 200 registry requests an hour). Runs even when a publish job failed,
   # to mirror the one that succeeded; anything missed is mirrored by the next
-  # run.
+  # run. Waits for the GHCR cleanup, which deletes signature tags left without
+  # an image: run alongside it, the mirror listed tags that were gone by the
+  # time it read them, and copied signatures nothing needs any more.
   dockerhub:
     name: Mirror to Docker Hub
-    needs: [detect, publish]
+    needs: [detect, publish, prune]
     if: always() && needs.detect.result == 'success' && needs.publish.result != 'cancelled'
     runs-on: ubuntu-latest
     timeout-minutes: 90
