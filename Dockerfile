@@ -31,6 +31,83 @@ RUN apk add --no-cache \
 COPY web /pgadmin4/web
 WORKDIR /pgadmin4/web
 
+# webpack leaves nothing a scanner can read: the bundle carries no package
+# metadata and package.json and yarn.lock are removed below. This records every
+# npm package whose code can end up in the bundle as a bare package.json, which
+# syft's default image catalogers pick up. That is the dependencies closure, not
+# yarn.lock, which also lists the build and test tooling that never ships. The
+# one dev dependency compiled into the bundle is core-js: babel's
+# useBuiltIns: "usage" injects its polyfills. Overreporting a package webpack
+# tree-shook away is the safe direction; missing one that shipped is not.
+COPY <<'EOF' /usr/local/share/npm-sbom.js
+const fs = require('fs');
+const path = require('path');
+
+const out = process.argv[2];
+const bundledDevDependencies = ['core-js'];
+const root = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+
+for (const name of bundledDevDependencies) {
+  if (!(root.devDependencies || {})[name]) {
+    throw new Error(`${name} is no longer a dev dependency; review bundledDevDependencies`);
+  }
+}
+
+// Node's own lookup: the nearest node_modules/<name> walking up from the dependent.
+function locate(name, from) {
+  for (let dir = from; ; dir = path.dirname(dir)) {
+    const manifest = path.join(dir, 'node_modules', name, 'package.json');
+    if (fs.existsSync(manifest)) return manifest;
+    if (path.dirname(dir) === dir) return null;
+  }
+}
+
+const seen = new Set();
+const queue = [];
+function visit(names, from, required) {
+  for (const name of names) {
+    const manifest = locate(name, from);
+    if (!manifest) {
+      if (required) throw new Error(`${name}, needed from ${from}, is not installed`);
+      continue;
+    }
+    if (!seen.has(manifest)) {
+      seen.add(manifest);
+      queue.push(manifest);
+    }
+  }
+}
+
+const cwd = process.cwd();
+visit(Object.keys(root.dependencies || {}), cwd, true);
+visit(bundledDevDependencies, cwd, true);
+visit(Object.keys(root.optionalDependencies || {}), cwd, false);
+
+const packages = new Map();
+while (queue.length) {
+  const manifest = queue.shift();
+  const pkg = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+  const dir = path.dirname(manifest);
+  if (pkg.name && pkg.version) {
+    packages.set(`${pkg.name}@${pkg.version}`, {
+      name: pkg.name,
+      version: pkg.version,
+      ...(pkg.license ? { license: pkg.license } : {}),
+    });
+  }
+  visit(Object.keys(pkg.dependencies || {}), dir, true);
+  visit(Object.keys(pkg.optionalDependencies || {}), dir, false);
+  visit(Object.keys(pkg.peerDependencies || {}), dir, false);
+}
+
+for (const [id, pkg] of packages) {
+  const dir = path.join(out, id);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify(pkg) + '\n');
+}
+console.log(`Recorded ${packages.size} npm packages in ${out}`);
+EOF
+
 RUN --mount=type=bind,source=.git,target=/pgadmin4/.git \
   --mount=type=tmpfs,target=node_modules \
   --mount=type=tmpfs,target=pgadmin/static/js/generated/.cache \
@@ -41,6 +118,7 @@ RUN --mount=type=bind,source=.git,target=/pgadmin4/.git \
   yarn set version "$(node -p "require('./package.json').packageManager.split('@')[1]")" && \
   yarn install && \
   yarn run bundle && \
+  node /usr/local/share/npm-sbom.js /sbom/npm && \
   rm -rf yarn.lock package.json .[^.]* babel.cfg webpack.* jest.config.js babel.*
 
 ########################################################################
@@ -149,6 +227,56 @@ COPY --from=pg18-builder /usr/local/bin/pg_dump /usr/local/pgsql/pgsql-18/
 COPY --from=pg18-builder /usr/local/bin/pg_dumpall /usr/local/pgsql/pgsql-18/
 COPY --from=pg18-builder /usr/local/bin/pg_restore /usr/local/pgsql/pgsql-18/
 COPY --from=pg18-builder /usr/local/bin/psql /usr/local/pgsql/pgsql-18/
+COPY --from=pg18-builder /usr/local/lib/libpq.so.5.18 /usr/local/lib/libpq-oauth-18.so /usr/local/pgsql-lib/
+
+# The official postgres images build PostgreSQL from source, so these files
+# carry no package record and a scanner reports nothing for them. Each one gets
+# an ELF package note (https://systemd.io/ELF_PACKAGE_METADATA/), which syft's
+# default image catalogers read, naming it postgresql at the version compiled
+# into it. The CPE is what grype matches PostgreSQL advisories on. libpq has no
+# version string of its own and comes from the same build as pgsql-18/psql.
+RUN apk add --no-cache binutils && sh -eu <<'EOF'
+note() {
+  file="$1"
+  version="$2"
+  json="{\"type\":\"generic\",\"name\":\"postgresql\",\"version\":\"${version}\",\"license\":\"PostgreSQL\",\"cpe\":\"cpe:2.3:a:postgresql:postgresql:${version}:*:*:*:*:*:*:*\"}"
+  len=$(printf '%s' "$json" | wc -c)
+  pad=$(( (4 - len % 4) % 4 ))
+  # Note header: namesz, descsz, type, then the "FDO" owner, all little-endian
+  # like the binaries on both published architectures.
+  le32() {
+    printf "\\$(printf %03o $(($1 & 255)))\\$(printf %03o $((($1 >> 8) & 255)))\\$(printf %03o $((($1 >> 16) & 255)))\\$(printf %03o $((($1 >> 24) & 255)))"
+  }
+  { le32 4; le32 $((len + pad)); le32 3405650558; printf 'FDO\0'; printf '%s' "$json"; head -c "$pad" /dev/zero; } > /tmp/note
+  objcopy --add-section .note.package=/tmp/note --set-section-flags .note.package=noload,readonly "$file"
+}
+
+compiled_version() {
+  version="$(grep -aoE '\(PostgreSQL\) [0-9]+\.[0-9]+' "$1" | head -n1 | cut -d' ' -f2)"
+  if [ -z "$version" ]; then
+    echo "No PostgreSQL version found in $1" >&2
+    exit 1
+  fi
+  echo "$version"
+}
+
+for dir in /usr/local/pgsql/pgsql-*; do
+  major="${dir##*-}"
+  for file in "$dir"/*; do
+    version="$(compiled_version "$file")"
+    if [ "${version%%.*}" != "$major" ]; then
+      echo "$file reports PostgreSQL $version, expected $major" >&2
+      exit 1
+    fi
+    note "$file" "$version"
+  done
+done
+
+version="$(compiled_version /usr/local/pgsql/pgsql-18/psql)"
+for file in /usr/local/pgsql-lib/*; do
+  note "$file" "$version"
+done
+EOF
 
 ########################################################################
 # Assemble a patched runtime with only application runtime dependencies.
@@ -196,6 +324,7 @@ RUN apk upgrade --no-cache && \
     libedit \
     libjpeg-turbo \
     libldap \
+    lz4-libs \
     shadow \
     su-exec \
     tzdata && \
@@ -203,11 +332,10 @@ RUN apk upgrade --no-cache && \
 
 COPY --from=python-builder /venv /venv
 COPY --from=tools-builder /usr/local/pgsql /usr/local/
-COPY --from=pg18-builder /usr/local/lib/libpq.so.5.18 /usr/local/lib/libpq-oauth-18.so /usr/lib/liblz4.so.1.10.0 /usr/lib/
+COPY --from=tools-builder /usr/local/pgsql-lib/ /usr/lib/
 
 RUN ln -s libpq.so.5.18 /usr/lib/libpq.so.5 && \
-  ln -s libpq.so.5.18 /usr/lib/libpq.so && \
-  ln -s liblz4.so.1.10.0 /usr/lib/liblz4.so.1
+  ln -s libpq.so.5.18 /usr/lib/libpq.so
 
 WORKDIR /pgadmin4
 
@@ -216,6 +344,27 @@ COPY --from=docs-builder /pgadmin4/docs/en_US/_build/html/ /pgadmin4/docs
 COPY pkg/docker/run_pgadmin.py pkg/docker/gunicorn_config.py /pgadmin4/
 COPY pkg/docker/entrypoint.sh /entrypoint.sh
 COPY LICENSE /pgadmin4/LICENSE
+COPY --from=app-builder /sbom/npm /usr/share/sbom/npm
+
+# pgAdmin runs from its source tree, which has no package metadata, so
+# advisories filed against pgadmin4 would never match the image. A minimal
+# dist-info names it the way PyPI does. It sits outside PYTHONPATH, so it is
+# only seen by scanners, and its version comes from the source being shipped,
+# checked against the version the build was asked for.
+RUN release="$(sed -n 's/^APP_RELEASE = \([0-9]*\)$/\1/p' /pgadmin4/version.py)" && \
+  revision="$(sed -n 's/^APP_REVISION = \([0-9]*\)$/\1/p' /pgadmin4/version.py)" && \
+  version="${release}.${revision}" && \
+  if [ -n "${VERSION}" ] && [ "${version}" != "${VERSION}" ]; then \
+    echo "Source is pgAdmin ${version}, build asked for ${VERSION}" >&2; exit 1; \
+  fi && \
+  mkdir -p "/usr/share/sbom/python/pgadmin4-${version}.dist-info" && \
+  printf '%s\n' \
+    'Metadata-Version: 2.1' \
+    'Name: pgadmin4' \
+    "Version: ${version}" \
+    'License: PostgreSQL' \
+    'Home-page: https://www.pgadmin.org/' \
+    > "/usr/share/sbom/python/pgadmin4-${version}.dist-info/METADATA"
 
 # shadow is kept for the entrypoint's root-only usermod, but none of the
 # setuid helpers it and linux-pam install are needed at runtime.
