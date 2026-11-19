@@ -108,6 +108,32 @@ for (const [id, pkg] of packages) {
 console.log(`Recorded ${packages.size} npm packages in ${out}`);
 EOF
 
+# Security floors for bundled npm packages fixed after pgAdmin's release tag was
+# cut, the npm counterpart of the Python floors below. They go in as yarn
+# resolutions, which pgAdmin already uses for the same purpose, and only for a
+# package upstream has not pinned itself: once it does, its choice wins. A floor
+# must be older than the npmMinimalAgeGate in .yarnrc.yml or the install fails.
+COPY <<'EOF' /usr/local/share/npm-security-floors.js
+const fs = require('fs');
+
+const floors = {
+  'follow-redirects': '^1.16.2',
+  'fast-uri': '^3.1.9',
+};
+
+const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+pkg.resolutions = pkg.resolutions || {};
+for (const [name, range] of Object.entries(floors)) {
+  if (pkg.resolutions[name]) {
+    console.log(`${name}: upstream resolution ${pkg.resolutions[name]} kept, floor ${range} skipped`);
+    continue;
+  }
+  pkg.resolutions[name] = range;
+  console.log(`${name}: floor ${range}`);
+}
+fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+EOF
+
 RUN --mount=type=bind,source=.git,target=/pgadmin4/.git \
   --mount=type=tmpfs,target=node_modules \
   --mount=type=tmpfs,target=pgadmin/static/js/generated/.cache \
@@ -116,6 +142,7 @@ RUN --mount=type=bind,source=.git,target=/pgadmin4/.git \
   corepack enable && \
   yarn set version berry && \
   yarn set version "$(node -p "require('./package.json').packageManager.split('@')[1]")" && \
+  node /usr/local/share/npm-security-floors.js && \
   yarn install && \
   yarn run bundle && \
   node /usr/local/share/npm-sbom.js /sbom/npm && \
