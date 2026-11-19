@@ -44,6 +44,24 @@ alerts, so the alerts list what a rebuild or a recipe change can clear. The
 full inventory, fixed or not, for both variants and the official image, is on
 the nightly [security report](https://fyannk.github.io/pgAdmin/).
 
+A scanner only reports on what it can identify, and three parts of the image
+ship with no package record of their own: the PostgreSQL client tools and libpq
+copied from the official postgres images, pgAdmin's own source tree, and the
+webpack bundle. The image build records each one where Syft's default
+catalogers look, so grype, the published SBOM and any Syft-based scanner see
+them without extra flags:
+
+- PostgreSQL binaries and libpq carry an
+  [ELF package note](https://systemd.io/ELF_PACKAGE_METADATA/) with the version
+  compiled into them.
+- pgAdmin is described by a minimal `pgadmin4` dist-info under
+  `/usr/share/sbom/python`.
+- Every npm package the bundle can contain, the production dependency closure
+  plus core-js, is a bare `package.json` under `/usr/share/sbom/npm`.
+
+Trivy does not read ELF package notes, so its column on the report still has no
+PostgreSQL findings for this image.
+
 **CI blocks on critical findings that have an applicable fix and that the
 change introduces.** That is the only class where a change to this repository
 can turn the check green, so it is the only class worth failing a build over.
