@@ -49,8 +49,11 @@ works the same way.
 | Tag | Points to |
 | --- | --- |
 | `latest` | The hardened variant of the newest pgAdmin release |
-| `<version>-hardened` | The hardened variant of that release, for example `9.18-hardened` |
+| `<version>-hardened` | The hardened variant of that release, for example `9.19-hardened` |
 | `<version>` | The official image of that release with only its capability removed, never rebuilt |
+
+**Obsolete:** `9.18`, `9.18-hardened` and every older release. The tags remain
+but are never rebuilt.
 
 For `linux/amd64`. The images are also on GitHub Container Registry as
 `ghcr.io/fyannk/pgadmin`, with the same digests.

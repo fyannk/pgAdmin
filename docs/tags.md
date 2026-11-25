@@ -18,6 +18,18 @@ docker pull fyannk/pgadmin:latest
 Images are published to GHCR and Docker Hub, for `linux/amd64`. A tag
 resolves to the same image digest on either.
 
+## Obsolete tags
+
+These tags are still there, so that nothing that pins them breaks, but they are
+never rebuilt and their known vulnerabilities only grow. Do not use them.
+
+| Tags | Use instead |
+| --- | --- |
+| `9.18`, `9.18-hardened` and every older release | `latest` or the newest `<version>-hardened` |
+
+`<version>` for the newest release is not obsolete, but it is never patched
+either: prefer `<version>-hardened`.
+
 ## Verifying an image
 
 Every image is signed with [cosign](https://github.com/sigstore/cosign),
