@@ -193,7 +193,7 @@ RUN apk add --no-cache --virtual .build-deps \
 # cryptography is compiled rather than installed from its wheel, which carries a
 # private copy of OpenSSL that only a new cryptography release can patch. Built
 # here it links Alpine's, which apk upgrade patches in the runtime stage. The
-# last command fails the build if a private copy comes back.
+# readelf checks fail the build if a private copy comes back.
 RUN python3 -m venv --system-site-packages --without-pip /venv && \
   /venv/bin/python3 -m pip install --no-cache-dir --upgrade \
     --constraint /tmp/security-constraints.txt \
