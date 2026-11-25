@@ -5,7 +5,8 @@ name: Published image watch
 # the fact is tracked here instead: a single issue that opens when a fixable
 # critical appears, is updated in place while it remains, and closes once the
 # nightly rebuild has cleared it. Editing an issue sends no notification, so a
-# finding that persists for a week costs one email, not seven.
+# finding that persists for a week costs one email, not seven. Every fixable
+# finding in the published image, critical or not, goes to code scanning.
 
 on:
   schedule:
@@ -80,3 +81,39 @@ jobs:
           else
             gh issue create --title "${title}" --body "${body}"
           fi
+
+  # CI uploads to code scanning only on a pull request or a push, so without
+  # this an advisory filed between two pushes would not show on the Security
+  # tab until the next one.
+  code-scanning:
+    name: Fixable findings to code scanning
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      security-events: write
+    steps:
+      # Scanned under the name CI gives its build, and uploaded under CI's
+      # category, so that a finding CI reported keeps its alert instead of
+      # getting a second one.
+      - name: Pull the published image
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/pgadmin:latest
+        run: |
+          set -euo pipefail
+          docker pull --quiet "${IMAGE}"
+          docker tag "${IMAGE}" pgadmin-ci:hardened
+
+      - name: Fixable findings
+        id: full
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          image: pgadmin-ci:hardened
+          fail-build: false
+          only-fixed: true
+          output-format: sarif
+
+      - name: Publish to code scanning
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
+        with:
+          sarif_file: ${{ steps.full.outputs.sarif }}
+          category: grype-hardened

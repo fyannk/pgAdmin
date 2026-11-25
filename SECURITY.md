@@ -40,7 +40,8 @@ coordinated disclosure date has been agreed.
 
 Every pull request rebuilds the hardened image, scans it with grype, and
 publishes the findings that have a fix to this repository's code scanning
-alerts, so the alerts list what a rebuild or a recipe change can clear. The
+alerts, so the alerts list what a rebuild or a recipe change can clear. A nightly
+scan of the published `latest` updates them between changes. The
 full inventory, fixed or not, for both variants and the official image, is on
 the nightly [security report](https://fyannk.github.io/pgAdmin/).
 
