@@ -200,6 +200,60 @@ RUN python3 -m venv --system-site-packages --without-pip /venv && \
   find /venv -type d -name '__pycache__' -prune -exec rm -rf {} +
 
 ########################################################################
+# Record the C libraries compiled into CPython or into a wheel, which carry no
+# package record: OpenSSL in cryptography, Expat in CPython, libpng in Pillow.
+# As for the PostgreSQL tools below, an ELF package note is what syft's default
+# image catalogers read. It goes on an empty shared object per library rather
+# than on the wheels' own files, whose hashes pip records.
+# cryptography's own list of its Rust crates is copied under a name the SBOM
+# generator reads; grype does not scan it in an image.
+########################################################################
+FROM python-builder AS bundled-libraries
+
+RUN apk add --no-cache gcc && /venv/bin/python3 - <<'EOF'
+import glob, json, os, pyexpat, re, shutil, subprocess, sys
+
+from cryptography.hazmat.backends.openssl import backend
+
+out = "/sbom/bundled"
+os.makedirs(out)
+site = glob.glob("/venv/lib/python3*/site-packages")[0]
+
+libraries = [
+    ("openssl", "openssl", backend.openssl_version_text().split()[1]),
+    ("libexpat", "libexpat_project", pyexpat.EXPAT_VERSION.removeprefix("expat_")),
+]
+for path in glob.glob(f"{site}/pillow.libs/*"):
+    if found := re.search(r"/libpng16-[0-9a-f]+\.so\.16\.([0-9]+)\.", path):
+        libraries.append(("libpng", "libpng", f"1.6.{found[1]}"))
+
+for name, vendor, version in libraries:
+    if not re.fullmatch(r"[0-9]+(\.[0-9]+)+[a-z]?", version):
+        sys.exit(f"unexpected {name} version {version!r}")
+    note = json.dumps({
+        "type": "generic", "name": name, "version": version,
+        "cpe": f"cpe:2.3:a:{vendor}:{name}:{version}:*:*:*:*:*:*:*",
+    })
+    with open("/tmp/note.json", "w") as f:
+        f.write(note)
+    with open("/tmp/note.s", "w") as f:
+        f.write(f"""
+            .section .note.package,"",%note
+            .balign 4
+            .long 4
+            .long {len(note)}
+            .long 0xcafe1a7e
+            .ascii "FDO\\0"
+            .incbin "/tmp/note.json"
+            .balign 4
+        """)
+    subprocess.run(["gcc", "-shared", "-nostdlib", "-o", f"{out}/{name}.so", "/tmp/note.s"], check=True)
+
+for path in glob.glob(f"{site}/cryptography-*.dist-info/sboms/cryptography-rust.cyclonedx.json"):
+    shutil.copy(path, f"{out}/cryptography-rust.cdx.json")
+EOF
+
+########################################################################
 # Build the help documentation. Documentation-only dependencies stay in this
 # stage and are never copied into the runtime image.
 ########################################################################
@@ -392,6 +446,9 @@ RUN release="$(sed -n 's/^APP_RELEASE = \([0-9]*\)$/\1/p' /pgadmin4/version.py)"
     'License: PostgreSQL' \
     'Home-page: https://www.pgadmin.org/' \
     > "/usr/share/sbom/python/pgadmin4-${version}.dist-info/METADATA"
+
+# See bundled-libraries, above.
+COPY --from=bundled-libraries /sbom/bundled /usr/share/sbom/bundled
 
 # shadow is kept for the entrypoint's root-only usermod, but none of the
 # setuid helpers it and linux-pam install are needed at runtime.

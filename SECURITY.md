@@ -59,6 +59,8 @@ them without extra flags:
   `/usr/share/sbom/python`.
 - Every npm package the bundle can contain, the production dependency closure
   plus core-js, is a bare `package.json` under `/usr/share/sbom/npm`.
+- OpenSSL in `cryptography`, Expat in CPython and libpng in Pillow each have an
+  ELF package note on an empty shared object under `/usr/share/sbom/bundled`.
 
 Trivy does not read ELF package notes, so its column on the report still has no
 PostgreSQL findings for this image.
