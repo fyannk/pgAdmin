@@ -190,18 +190,26 @@ RUN apk add --no-cache --virtual .build-deps \
 # --without-pip keeps pip and wheel out of the runtime venv: the interpreter
 # reaches the base image's pip through --system-site-packages for the install,
 # so neither ends up as a scannable distribution in the shipped image.
+# cryptography is compiled rather than installed from its wheel, which carries a
+# private copy of OpenSSL that only a new cryptography release can patch. Built
+# here it links Alpine's, which apk upgrade patches in the runtime stage. The
+# last command fails the build if a private copy comes back.
 RUN python3 -m venv --system-site-packages --without-pip /venv && \
   /venv/bin/python3 -m pip install --no-cache-dir --upgrade \
     --constraint /tmp/security-constraints.txt \
+    --no-binary cryptography \
     -r /tmp/requirements.txt \
     gunicorn==23.0.0 && \
   /venv/bin/python3 -m pip check && \
+  readelf -d /venv/lib/python3*/site-packages/cryptography/hazmat/bindings/_rust*.so > /tmp/needed && \
+  grep -F 'NEEDED' /tmp/needed | grep -qF '[libssl.so.3]' && \
+  grep -F 'NEEDED' /tmp/needed | grep -qF '[libcrypto.so.3]' && \
   apk del .build-deps && \
   find /venv -type d -name '__pycache__' -prune -exec rm -rf {} +
 
 ########################################################################
 # Record the C libraries compiled into CPython or into a wheel, which carry no
-# package record: OpenSSL in cryptography, Expat in CPython, libpng in Pillow.
+# package record: Expat in CPython, libpng in Pillow.
 # As for the PostgreSQL tools below, an ELF package note is what syft's default
 # image catalogers read. It goes on an empty shared object per library rather
 # than on the wheels' own files, whose hashes pip records.
@@ -213,14 +221,11 @@ FROM python-builder AS bundled-libraries
 RUN apk add --no-cache gcc && /venv/bin/python3 - <<'EOF'
 import glob, json, os, pyexpat, re, shutil, subprocess, sys
 
-from cryptography.hazmat.backends.openssl import backend
-
 out = "/sbom/bundled"
 os.makedirs(out)
 site = glob.glob("/venv/lib/python3*/site-packages")[0]
 
 libraries = [
-    ("openssl", "openssl", backend.openssl_version_text().split()[1]),
     ("libexpat", "libexpat_project", pyexpat.EXPAT_VERSION.removeprefix("expat_")),
 ]
 for path in glob.glob(f"{site}/pillow.libs/*"):
