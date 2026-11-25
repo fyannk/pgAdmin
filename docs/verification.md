@@ -36,7 +36,8 @@ of publishing that platform.
 The hardened image is also scanned with grype. The gate blocks on critical
 findings with an applicable fix that the change introduces; one already in the
 published image is tracked by a nightly-updated issue, and every other finding
-with a fix is published to the repository's code scanning results. See
+with a fix is published to the repository's code scanning results, on every
+change and each night from the published image. See
 [SECURITY.md](../SECURITY.md).
 
 ## The nightly security report
