@@ -202,8 +202,8 @@ RUN python3 -m venv --system-site-packages --without-pip /venv && \
     gunicorn==23.0.0 && \
   /venv/bin/python3 -m pip check && \
   readelf -d /venv/lib/python3*/site-packages/cryptography/hazmat/bindings/_rust*.so > /tmp/needed && \
-  grep -F 'NEEDED' /tmp/needed | grep -qF '[libssl.so.3]' && \
-  grep -F 'NEEDED' /tmp/needed | grep -qF '[libcrypto.so.3]' && \
+  grep -q 'NEEDED.*\[libssl\.so\.3\]' /tmp/needed && \
+  grep -q 'NEEDED.*\[libcrypto\.so\.3\]' /tmp/needed && \
   apk del .build-deps && \
   find /venv -type d -name '__pycache__' -prune -exec rm -rf {} +
 
